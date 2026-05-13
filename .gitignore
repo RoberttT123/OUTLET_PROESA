@@ -1,0 +1,23 @@
+# Entorno Virtual
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos de configuración y secretos (MUY IMPORTANTE)
+credentials.json
+config.py
+.streamlit/secrets.toml
+
+# Datos locales (No se suben porque usaremos Google Sheets o el Excel está en tu PC)
+data/*.xlsx
+data/*.csv
+
+# Sistema
+.DS_Store
+Thumbs.db
