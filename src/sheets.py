@@ -144,6 +144,7 @@ def obtener_todos_pedidos_sheets(
     
     except Exception as e:
         return pd.DataFrame()
+    
 def actualizar_stock_sheets(codigo_producto: str, cantidad_a_restar: int, url_sheet: str, hoja: str = "Inventario"):
     """
     Busca un producto por código y resta la cantidad del stock en Google Sheets.
