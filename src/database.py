@@ -18,8 +18,7 @@ def limpiar_formato_latino(valor):
 
 def cargar_inventario(archivo):
     """Lee el Excel inicial y limpia los formatos de número."""
-    df = pd.read_excel(archivo, sheet_name="Hoja1")
-    
+    df = pd.read_excel(archivo, sheet_name="Inventario")    
     # Limpiamos las columnas críticas (Stock en índice 3 y Precio en índice 4)
     df.iloc[:, 3] = df.iloc[:, 3].apply(limpiar_formato_latino)
     df.iloc[:, 3] = pd.to_numeric(df.iloc[:, 3], errors='coerce').fillna(0)

@@ -154,7 +154,7 @@ def get_logo_b64(path="assets/logo_proesa.png"):
 # ── HEADER ──────────────────────────────────────────────────────────────────
 logo_b64 = get_logo_b64()
 logo_html = (
-    f'<img src="data:image/png;base64,{logo_b64}" style="height:52px;object-fit:contain;">'
+    f'<img src="data:image/png;base64,{logo_b64}" style="height:100px;object-fit:contain;">'
     if logo_b64
     else '<div style="font-size:2.2rem">📝</div>'
 )

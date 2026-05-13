@@ -144,6 +144,39 @@ def obtener_todos_pedidos_sheets(
     
     except Exception as e:
         return pd.DataFrame()
+def actualizar_stock_sheets(codigo_producto: str, cantidad_a_restar: int, url_sheet: str, hoja: str = "Inventario"):
+    """
+    Busca un producto por código y resta la cantidad del stock en Google Sheets.
+    """
+    try:
+        gc = get_gsheet_connection()
+        if gc is None: return False
+        
+        spreadsheet = gc.open_by_url(url_sheet)
+        worksheet = spreadsheet.worksheet(hoja)
+        
+        # 1. Buscar la columna de 'Código Producto' (suponiendo que es la B / índice 2)
+        # y la columna de 'Stock' (suponiendo que es la D / índice 4)
+        lista_codigos = worksheet.col_values(2) # Columna B
+        
+        if codigo_producto in lista_codigos:
+            # Encontrar el índice de la fila (gspread usa base 1)
+            row_idx = lista_codigos.index(codigo_producto) + 1
+            
+            # 2. Obtener el valor actual del stock (Columna D es la 4)
+            stock_actual = int(worksheet.cell(row_idx, 4).value)
+            nuevo_stock = stock_actual - cantidad_a_restar
+            
+            # 3. Actualizar la celda con el nuevo valor
+            worksheet.update_cell(row_idx, 4, nuevo_stock)
+            return True
+        else:
+            st.error(f"Cod {codigo_producto} no encontrado en Inventario.")
+            return False
+            
+    except Exception as e:
+        st.error(f"Error al actualizar stock en la nube: {e}")
+        return False
 
 
 # Headers esperados
