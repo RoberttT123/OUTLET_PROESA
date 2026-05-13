@@ -179,7 +179,7 @@ html, body, [class*="css"] {
 # ── HEADER HERO ─────────────────────────────────────────────────────────────
 logo_b64 = get_logo_b64()
 logo_html = (
-    f'<img src="data:image/png;base64,{logo_b64}" style="height:128px;object-fit:contain;">'
+    f'<img src="data:image/png;base64,{logo_b64}" style="height:64px;object-fit:contain;">'
     if logo_b64
     else '<div style="font-size:2.2rem">📦</div>'
 )
@@ -268,7 +268,7 @@ st.markdown('<div class="section-title">🔍 Catálogo de Productos</div>', unsa
 col_filtro, col_busqueda = st.columns([1, 2])
 with col_filtro:
     empresas = ["Todas"] + sorted(df_inv[empresa_col].dropna().unique().tolist())
-    filtro = st.selectbox("Epresa", empresas, label_visibility="collapsed")
+    filtro = st.selectbox("Empresa", empresas, label_visibility="collapsed")
 with col_busqueda:
     busqueda = st.text_input("Buscar producto...", placeholder="Escribe para filtrar por nombre...", label_visibility="collapsed")
 

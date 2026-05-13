@@ -146,43 +146,31 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
 
     with st.sidebar:
 
-       # Logo
+        # Logo
         logo_b64 = get_logo_b64()
         if logo_b64:
             st.markdown(f"""
-            <div style="padding: 1.5rem 1rem;
-                        border-bottom: 1px solid #1A1A32;
-                        margin-bottom: 0.25rem;
-                        text-align: center;">  <!-- Centra todo el contenido -->
+            <div style="padding:1.4rem 1.25rem 1rem;
+                        border-bottom:1px solid #1A1A32;
+                        margin-bottom:0.25rem;">
                 <img src="data:image/png;base64,{logo_b64}"
-                     style="width: auto; 
-                            max-width: 100%; 
-                            height: 100px; /* Aquí controlas el tamaño */
-                            object-fit: contain; 
-                            margin: 0 auto; 
-                            display: block;">
-                <div style="margin-top: 0.8rem; 
-                            font-size: 0.65rem; 
-                            font-weight: 700;
-                            text-transform: uppercase; 
-                            letter-spacing: 2.5px; 
-                            color: #4A5578; /* Un poco más claro para que se vea mejor */
-                            text-align: center;">
+                     style="width:100%; max-height:52px;
+                            object-fit:contain; object-position:left center;">
+                <div style="margin-top:0.55rem; font-size:0.62rem; font-weight:700;
+                            text-transform:uppercase; letter-spacing:2.5px; color:#2E3A5A;">
                     SISTEMA DE PEDIDOS
                 </div>
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown("""
-            <div style="padding: 1.5rem 1rem;
-                        border-bottom: 1px solid #1A1A32; 
-                        margin-bottom: 0.25rem;
-                        text-align: center;">
-                <div style="font-size: 1.2rem; font-weight: 700; color: #FFFFFF;">
+            <div style="padding:1.4rem 1.25rem 1rem;
+                        border-bottom:1px solid #1A1A32; margin-bottom:0.25rem;">
+                <div style="font-size:1.1rem; font-weight:700; color:#FFFFFF;">
                     Outlet PROESA
                 </div>
-                <div style="font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
-                            letter-spacing: 2.5px; color: #4A5578; margin-top: 0.5rem;">
+                <div style="font-size:0.62rem; font-weight:700; text-transform:uppercase;
+                            letter-spacing:2.5px; color:#2E3A5A; margin-top:0.3rem;">
                     SISTEMA DE PEDIDOS
                 </div>
             </div>
@@ -197,8 +185,9 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
         </div>
         """, unsafe_allow_html=True)
 
-        st.page_link("app.py",            label="📦  Panel de Control")
-        st.page_link("pages/registro.py", label="📝  Registro de Pedidos")
+        st.page_link("app.py",             label="📦  Panel de Control")
+        st.page_link("pages/registro.py",  label="📝  Registro Manual")
+        st.page_link("pages/dashboard.py", label="📊  Dashboard Consolidado")
 
         st.markdown("<hr style='margin:0.75rem 0'>", unsafe_allow_html=True)
 
