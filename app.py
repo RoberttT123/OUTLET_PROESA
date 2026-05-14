@@ -21,7 +21,11 @@ PATH_INV_SISTEMA = "data/inventario_maestro.xlsx"
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
-
+.block-container {
+        padding-top: 1rem !important; /* Reduce el espacio a casi nada */
+        padding-bottom: 0rem !important;
+        margin-top: -20px; /* Sube el contenido un poco más */
+    }
 html, body, [class*="css"] {
     font-family: 'DM Sans', sans-serif;
 }
@@ -179,7 +183,7 @@ html, body, [class*="css"] {
 # ── HEADER HERO ─────────────────────────────────────────────────────────────
 logo_b64 = get_logo_b64()
 logo_html = (
-    f'<img src="data:image/png;base64,{logo_b64}" style="height:64px;object-fit:contain;">'
+    f'<img src="data:image/png;base64,{logo_b64}" style="height:150px;object-fit:contain;">'
     if logo_b64
     else '<div style="font-size:2.2rem">📦</div>'
 )

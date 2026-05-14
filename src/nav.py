@@ -23,6 +23,14 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
     @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
 
     /* Botón colapsar sidebar — ícono correcto */
+    [data-testid="stSidebarContent"] {
+    padding-top: 0rem !important;
+    }
+
+    /* Ajustar el contenedor de los elementos para que peguen arriba */
+    [data-testid="stSidebarUserContent"] {
+        padding-top: 0.5rem !important;
+    }
     [data-testid="stSidebarCollapseButton"] button {
         background: transparent !important;
         border: none !important;
@@ -39,6 +47,7 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
         font-size: 1.3rem !important;
         color: #3A4A6A !important;
     }
+    
 
     /* Sidebar shell */
     [data-testid="stSidebar"] {
@@ -147,30 +156,35 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
     with st.sidebar:
 
         # Logo
+# Logo Centrado y más arriba
         logo_b64 = get_logo_b64()
         if logo_b64:
             st.markdown(f"""
-            <div style="padding:1.4rem 1.25rem 1rem;
-                        border-bottom:1px solid #1A1A32;
-                        margin-bottom:0.25rem;">
+            <div style="padding: 0.1rem 1rem 1rem; /* Reducido de 1.4rem a 0.5rem */
+                        border-bottom: 1px solid #1A1A32;
+                        margin-bottom: 0.25rem;
+                        text-align: center;">
                 <img src="data:image/png;base64,{logo_b64}"
-                     style="width:100%; max-height:52px;
-                            object-fit:contain; object-position:left center;">
-                <div style="margin-top:0.55rem; font-size:0.62rem; font-weight:700;
-                            text-transform:uppercase; letter-spacing:2.5px; color:#2E3A5A;">
+                     style="width: 85%; max-height: 150px; /* Un poco más grande */
+                            object-fit: contain; margin: 0 auto;">
+                <div style="margin-top: 0.6rem; font-size: 0.65rem; font-weight: 700;
+                            text-transform: uppercase; letter-spacing: 2.5px; color: #3A4A6A;">
                     SISTEMA DE PEDIDOS
                 </div>
             </div>
             """, unsafe_allow_html=True)
         else:
+            # Caso sin logo (texto centrado)
             st.markdown("""
-            <div style="padding:1.4rem 1.25rem 1rem;
-                        border-bottom:1px solid #1A1A32; margin-bottom:0.25rem;">
-                <div style="font-size:1.1rem; font-weight:700; color:#FFFFFF;">
+            <div style="padding: 1.4rem 1rem 1rem;
+                        border-bottom: 1px solid #1A1A32; 
+                        margin-bottom: 0.25rem;
+                        text-align: center;">
+                <div style="font-size: 1.1rem; font-weight: 700; color: #FFFFFF;">
                     Outlet PROESA
                 </div>
-                <div style="font-size:0.62rem; font-weight:700; text-transform:uppercase;
-                            letter-spacing:2.5px; color:#2E3A5A; margin-top:0.3rem;">
+                <div style="font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
+                            letter-spacing: 2.5px; color: #3A4A6A; margin-top: 0.3rem;">
                     SISTEMA DE PEDIDOS
                 </div>
             </div>

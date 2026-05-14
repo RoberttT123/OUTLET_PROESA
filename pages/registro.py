@@ -57,7 +57,10 @@ st.markdown("""
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 
 .stApp { background: #F5F4F0; }
-
+.block-container {
+    padding-top: 0.2rem !important; /* Ajusta a 0 si quieres que pegue totalmente */
+    padding-bottom: 0rem !important;
+}
 .page-header {
     background: #FFFFFF;
     border-radius: 16px;
@@ -178,7 +181,7 @@ def get_logo_b64(path="assets/logo_proesa.png"):
 # ── HEADER ──────────────────────────────────────────────────────────────────
 logo_b64 = get_logo_b64()
 logo_html = (
-    f'<img src="data:image/png;base64,{logo_b64}" style="height:100px;object-fit:contain;">'
+    f'<img src="data:image/png;base64,{logo_b64}" style="height:150px;object-fit:contain;">'
     if logo_b64
     else '<div style="font-size:2.2rem">📝</div>'
 )
@@ -252,6 +255,8 @@ with tab_form:
             st.markdown('<div class="section-title">Selección de Producto</div>', unsafe_allow_html=True)
 
             with st.form("registro_operativo"):
+                busqueda_prod = st.text_input("Busca un producto...", placeholder="Escribe el nombre o código para filtrar")
+                
                 if "Nombre Producto" in df_inv.columns:
                     lista_prods = df_inv["Nombre Producto"].dropna().tolist()
                 elif len(df_inv.columns) > 2:
@@ -259,9 +264,22 @@ with tab_form:
                 else:
                     lista_prods = []
 
+                # Filtrar por nombre O código
+                if busqueda_prod:
+                    prods_filtrados = []
+                    for prod_nombre in lista_prods:
+                        fila_prod = df_inv[df_inv["Nombre Producto"] == prod_nombre].iloc[0]
+                        codigo = str(fila_prod["Código Producto"] if "Código Producto" in fila_prod.index else fila_prod.iloc[1])
+                        
+                        # Si coincide con nombre O código, agregar
+                        if busqueda_prod.lower() in prod_nombre.lower() or busqueda_prod.lower() in codigo.lower():
+                            prods_filtrados.append(prod_nombre)
+                else:
+                    prods_filtrados = lista_prods
+
                 prod_sel = st.selectbox(
                     "Producto",
-                    options=lista_prods,
+                    options=prods_filtrados,
                     index=None,
                     placeholder="Escribe para filtrar...",
                     label_visibility="collapsed"

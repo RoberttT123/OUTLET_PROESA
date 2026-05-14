@@ -34,14 +34,22 @@ st.markdown("""
 
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .stApp { background: #F5F4F0; }
-
+.block-container {
+    padding-top: 0.2rem !important; /* Ajusta a 0 si quieres que pegue totalmente */
+    padding-bottom: 0rem !important;
+}
 .hero-login {
     background: linear-gradient(135deg, #1A1A2E 0%, #0F3460 100%);
     border-radius: 20px;
-    padding: 2.5rem;
+    padding: 2.5rem 2.5rem; /* Reducimos padding vertical de 2.5rem a 1rem */
     margin-bottom: 2rem;
     text-align: center;
     color: white;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 140px; /* Ajusta esto a la altura que quieras que tenga el bloque azul fijo */
 }
 .hero-login h1 {
     font-size: 2.2rem;
@@ -150,14 +158,16 @@ if df_inv.empty:
 # ═════════════════════════════════════════════════════════════════════════════
 # PANTALLA 1: LOGIN CON VALIDACIÓN DE EMPLEADO
 # ═════════════════════════════════════════════════════════════════════════════
+# Busca esta parte en tu código de la Pantalla 1:
 if not st.session_state.logged_in:
     logo_b64 = get_logo_b64()
     
+    # Cambia el renderizado por este:
     st.markdown(f"""
     <div class="hero-login">
-        {'<img src="data:image/png;base64,' + logo_b64 + '" style="height:140px;object-fit:contain;margin-bottom:1rem;">' if logo_b64 else ''}
-        <h1>Outlet PROESA</h1>
-        <p>Sistema de Pedidos para Empleados</p>
+        {f'<img src="data:image/png;base64,{logo_b64}" style="height:210px; width:auto; object-fit:contain; margin-top:-20px; margin-bottom:0px;">' if logo_b64 else ''}
+        <h1 style="margin-top:0;">Outlet PROESA</h1>
+        <p style="margin-bottom:0;">Sistema de Pedidos para Empleados</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -213,7 +223,15 @@ else:
             st.stop()
 
         if busqueda:
-            prods_filtrados = [p for p in lista_prods if busqueda.lower() in p.lower()]
+            # Buscar por nombre O por código
+            prods_filtrados = []
+            for prod_nombre in lista_prods:
+                fila_prod = df_inv[df_inv["Nombre Producto"] == prod_nombre].iloc[0]
+                codigo = str(fila_prod["Código Producto"] if "Código Producto" in fila_prod.index else fila_prod.iloc[1])
+                
+                # Si coincide con nombre O código, agregar
+                if busqueda.lower() in prod_nombre.lower() or busqueda.lower() in codigo.lower():
+                    prods_filtrados.append(prod_nombre)
         else:
             prods_filtrados = lista_prods
 

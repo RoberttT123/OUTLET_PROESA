@@ -25,6 +25,11 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap');
     html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+    .block-container {
+        padding-top: 1rem !important; /* Reduce el espacio a casi nada */
+        padding-bottom: 0rem !important;
+        margin-top: -20px; /* Sube el contenido un poco más */
+    }
     .stMetric {
         background: white;
         padding: 1.5rem;
