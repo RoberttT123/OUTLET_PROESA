@@ -9,14 +9,16 @@ try:
     CONFIG_LOADED = True
 except ImportError:
     CONFIG_LOADED = False
-    st.error("❌ Archivo `config.py` no encontrado. Copia `config.example.py` a `config.py` y llena las URLs.")
+    st.error("❌ Archivo `config.py` no encontrado.")
     st.stop()
 
 from src.sheets import (
     obtener_inventario_sheets,
     obtener_pedidos_empleado_sheets,
-    guardar_pedido_sheets
+    guardar_pedido_sheets,
+    actualizar_stock_sheets
 )
+from src.database import obtener_datos_empleado, validar_empleado
 
 st.set_page_config(
     page_title="Mi Pedido - Outlet PROESA",
@@ -94,6 +96,15 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .stock-warn { background: #FEF9C3; color: #854D0E; border-radius: 20px; padding: 3px 12px; font-size: 0.75rem; }
 .stock-out { background: #FEE2E2; color: #991B1B; border-radius: 20px; padding: 3px 12px; font-size: 0.75rem; }
 
+.emp-info {
+    background: #F0F7FF;
+    border: 1px solid #BFDBFE;
+    border-radius: 10px;
+    padding: 1rem;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+}
+
 #MainMenu, header, footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -109,61 +120,80 @@ def get_logo_b64(path="assets/logo_proesa.png"):
 # ── SESSION STATE ───────────────────────────────────────────────────────────
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
+
+if 'cod_emp' not in st.session_state:
     st.session_state.cod_emp = None
+
+if 'nom_emp' not in st.session_state:
     st.session_state.nom_emp = None
+
+if 'empresa' not in st.session_state:
+    st.session_state.empresa = None
+
+if 'regional' not in st.session_state:
+    st.session_state.regional = None
+
+if 'carrito' not in st.session_state:
     st.session_state.carrito = []
 
 # ── CARGAR INVENTARIO ───────────────────────────────────────────────────────
-@st.cache_data(ttl=300)  # Cache por 5 minutos
+@st.cache_data(ttl=300)
 def cargar_inventario():
     return obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
 
 df_inv = cargar_inventario()
 
 if df_inv.empty:
-    st.error("❌ No se pudo cargar el catálogo. Verifica la configuración de Google Sheets.")
+    st.error("❌ No se pudo cargar el catálogo.")
     st.stop()
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PANTALLA 1: LOGIN
+# PANTALLA 1: LOGIN CON VALIDACIÓN DE EMPLEADO
 # ═════════════════════════════════════════════════════════════════════════════
 if not st.session_state.logged_in:
     logo_b64 = get_logo_b64()
     
     st.markdown(f"""
     <div class="hero-login">
-        {'<img src="data:image/png;base64,' + logo_b64 + '" style="height:80px;object-fit:contain;margin-bottom:1rem;">' if logo_b64 else ''}
+        {'<img src="data:image/png;base64,' + logo_b64 + '" style="height:140px;object-fit:contain;margin-bottom:1rem;">' if logo_b64 else ''}
         <h1>Outlet PROESA</h1>
         <p>Sistema de Pedidos para Empleados</p>
     </div>
     """, unsafe_allow_html=True)
 
     with st.form("login_form"):
-        cod_inp = st.text_input("Código de Empleado", placeholder="Ej: E0200491")
-        nom_inp = st.text_input("Nombre Completo", placeholder="Tu nombre y apellido")
+        cod_inp = st.text_input("Código de Empleado", placeholder="Ej: E0200491").upper().strip()
         
-        if st.form_submit_button("🚀 Continuar", use_container_width=True):
-            if cod_inp and nom_inp:
-                st.session_state.logged_in = True
-                st.session_state.cod_emp = cod_inp.upper()
-                st.session_state.nom_emp = nom_inp.title()
-                st.rerun()
+        if st.form_submit_button("🚀 Validar Código", use_container_width=True):
+            if cod_inp:
+                # VALIDAR EMPLEADO
+                datos = obtener_datos_empleado(cod_inp)
+                
+                if datos.get('encontrado'):
+                    st.session_state.logged_in = True
+                    st.session_state.cod_emp = cod_inp
+                    st.session_state.nom_emp = datos['nombre']
+                    st.session_state.empresa = datos['empresa']
+                    st.session_state.regional = datos['regional']
+                    st.rerun()
+                else:
+                    st.error(f"❌ Código '{cod_inp}' no encontrado. Verifica tu código de empleado.")
             else:
-                st.error("⚠️ Completa ambos campos.")
+                st.error("⚠️ Ingresa tu código de empleado.")
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PANTALLA 2: PEDIDOS
 # ═════════════════════════════════════════════════════════════════════════════
 else:
     logo_b64 = get_logo_b64()
-    logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="height:52px;object-fit:contain;">' if logo_b64 else "🛒"
+    logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="height:100px;object-fit:contain;">' if logo_b64 else "🛒"
     
     st.markdown(f"""
     <div class="page-header">
         {logo_html}
         <div>
             <h2>Tu Pedido</h2>
-            <p>👤 {st.session_state.nom_emp} · 🔖 {st.session_state.cod_emp}</p>
+            <p>👤 {st.session_state.nom_emp} · 🔖 {st.session_state.cod_emp} · 🏢 {st.session_state.empresa or 'N/A'}</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -174,54 +204,50 @@ else:
     with col_pedido:
         st.markdown('<div class="section-title">📦 Catálogo de Productos</div>', unsafe_allow_html=True)
 
-        busqueda = st.text_input("Busca un producto...", placeholder="Escribe el nombre o código")
+        busqueda = st.text_input("Busca un producto...", placeholder="Escribe el nombre o código para filtrar")
 
-        # Obtener nombres de productos
         if "Nombre Producto" in df_inv.columns:
             lista_prods = df_inv["Nombre Producto"].dropna().tolist()
         else:
-            st.error("❌ Columna 'Nombre Producto' no encontrada en Google Sheets")
+            st.error("❌ Columna 'Nombre Producto' no encontrada")
             st.stop()
 
-        # Filtrar
-        prods_filtrados = lista_prods
         if busqueda:
             prods_filtrados = [p for p in lista_prods if busqueda.lower() in p.lower()]
+        else:
+            prods_filtrados = lista_prods
 
         if not prods_filtrados:
-            st.info("No se encontraron productos.")
+            st.info("No se encontraron productos con ese nombre.")
         else:
-            for prod_nombre in prods_filtrados[:50]:  # Limit a 50 productos
+            st.caption(f"Mostrando {min(len(prods_filtrados), 5)} de {len(prods_filtrados)} productos encontrados")
+            
+            for prod_nombre in prods_filtrados[:5]:  
                 fila = df_inv[df_inv["Nombre Producto"] == prod_nombre].iloc[0]
                 
                 try:
-                    stock = int(float(fila.get("Stock", 0)))
-                    precio = float(fila.get("Precio Unitario", 0))
-                    codigo = str(fila.get("Código Producto", "N/A"))
+                    stock = int(float(fila["Stock"] if "Stock" in fila.index else fila.iloc[3]))
+                    precio = float(fila["Precio Unitario"] if "Precio Unitario" in fila.index else fila.iloc[4])
+                    codigo = str(fila["Código Producto"] if "Código Producto" in fila.index else fila.iloc[1])
                 except:
                     continue
 
-                # Stock badge
                 if stock <= 0:
                     stock_badge = '<span class="stock-out">❌ Agotado</span>'
                     disabled = True
-                elif stock <= 5:
-                    stock_badge = f'<span class="stock-warn">⚠️ Stock bajo: {stock}</span>'
-                    disabled = False
                 else:
                     stock_badge = f'<span class="stock-ok">✅ {stock} disponibles</span>'
                     disabled = False
 
                 with st.container():
                     c1, c2, c3 = st.columns([2, 1.2, 0.8])
-                    
                     with c1:
                         st.markdown(f"**{prod_nombre}**\n`{codigo}`")
                     with c2:
                         st.markdown(f"**Bs {precio:,.2f}**\n{stock_badge}", unsafe_allow_html=True)
                     with c3:
                         if not disabled:
-                            cant = st.number_input("Qty", min_value=1, max_value=max(stock, 1), 
+                            cant = st.number_input("Cant", min_value=1, max_value=max(stock, 1), 
                                                  value=1, key=f"qty_{codigo}")
                             if st.button("➕", key=f"btn_{codigo}"):
                                 st.session_state.carrito.append({
@@ -231,7 +257,6 @@ else:
                                     "precio_unitario": precio,
                                     "subtotal": precio * int(cant)
                                 })
-                                st.toast(f"✅ Agregado")
                                 st.rerun()
 
     # ── COLUMNA 2: CARRITO ───────────────────────────────────────────────────
@@ -265,19 +290,18 @@ else:
             """, unsafe_allow_html=True)
 
             if st.button("✅ ENVIAR PEDIDO", type="primary", use_container_width=True):
-                # Preparar items con todos los datos
                 items_para_sheets = []
                 for item in st.session_state.carrito:
                     fila = df_inv[df_inv["Nombre Producto"] == item['producto']].iloc[0]
                     items_para_sheets.append({
-                        "codigo_producto": str(fila.get("Código Producto", fila.iloc[1])),
+                        "codigo_producto": item['codigo_producto'],
                         "producto": item['producto'],
                         "cantidad": item['cantidad'],
-                        "precio_unitario": float(fila.get("Precio Unitario", fila.iloc[4])),
-                        "linea": str(fila.get("Línea", fila.iloc[0])),
+                        "precio_unitario": item['precio_unitario'],
+                        "linea": str(fila["Línea"] if "Línea" in fila.index else fila.iloc[0]),
                         "descuento": 0,
-                        "stock_actual": int(fila.get("Stock", fila.iloc[3])),
-                        "empresa": str(fila.get("Empresa", fila.iloc[5]))
+                        "stock_actual": int(fila["Stock"] if "Stock" in fila.index else fila.iloc[3]),
+                        "empresa": st.session_state.empresa or "PROESA"
                     })
                 
                 if guardar_pedido_sheets(
@@ -287,12 +311,21 @@ else:
                     PEDIDOS_SHEET_URL,
                     PEDIDOS_HOJA_NAME
                 ):
+                    for item in items_para_sheets:
+                        actualizar_stock_sheets(
+                            codigo_producto=item['codigo_producto'],
+                            cantidad_a_restar=item['cantidad'],
+                            url_sheet=INVENTARIO_SHEET_URL,
+                            hoja=INVENTARIO_HOJA_NAME
+                        )
+                    
                     st.session_state.carrito = []
-                    st.success("🎉 ¡Pedido enviado! Trade Marketing lo procesará pronto.")
+                    st.cache_data.clear()
+                    st.success("🎉 ¡Pedido enviado y stock actualizado!")
                     st.balloons()
                     st.rerun()
                 else:
-                    st.error("❌ Error al enviar pedido. Intenta nuevamente.")
+                    st.error("❌ Error al enviar pedido.")
         else:
             st.info("Tu carrito está vacío.\nAgrega productos a la izquierda.")
 
@@ -307,12 +340,11 @@ else:
     )
 
     if not mis_pedidos.empty:
-        for _, pedido in mis_pedidos.iterrows():
-            estado_badge = "⏳ Pendiente" if pedido.get("Estado") == "Pendiente" else "✅ Confirmado"
+        for _, pedido in mis_pedidos.tail(5).iterrows():
             st.markdown(f"""
             📦 **{pedido.get('Nombre Producto', 'N/A')}** · {pedido.get('Cantidad', 0)} ud.
             
-            📅 {pedido.get('Fecha', '')} — {estado_badge}
+            📅 {pedido.get('Fecha Registro', '')}
             """)
     else:
         st.info("No has hecho pedidos aún.")
@@ -321,4 +353,8 @@ else:
     if st.button("🚪 Cerrar Sesión"):
         st.session_state.logged_in = False
         st.session_state.carrito = []
+        st.session_state.cod_emp = None
+        st.session_state.nom_emp = None
+        st.session_state.empresa = None
+        st.session_state.regional = None
         st.rerun()

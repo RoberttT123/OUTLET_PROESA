@@ -13,15 +13,16 @@ except ImportError:
 
 from src.nav import render_nav
 from src.logic import validar_stock, preparar_fila_pedido
+from src.database import obtener_datos_empleado, validar_empleado
 
 # Importar funciones de BD según la configuración
 if USING_SHEETS:
     from src.sheets import (
         obtener_inventario_sheets,
         obtener_todos_pedidos_sheets,
-        guardar_pedido_sheets
+        guardar_pedido_sheets,
+        actualizar_stock_sheets
     )
-    actualizar_stock_sheets = None  # TODO: implementar
 else:
     from src.database import guardar_pedido, actualizar_stock_inventario
     PATH_INV_SISTEMA = "data/inventario_maestro.xlsx"
@@ -32,6 +33,21 @@ st.set_page_config(page_title="Registro de Pedidos", layout="wide", page_icon="�
 # ── INICIALIZACIÓN DEL CARRITO ──────────────────────────────────────────────
 if 'carrito' not in st.session_state:
     st.session_state.carrito = []
+
+if 'emp_validado' not in st.session_state:
+    st.session_state.emp_validado = False
+
+if 'cod_emp_validado' not in st.session_state:
+    st.session_state.cod_emp_validado = None
+
+if 'nom_emp_validado' not in st.session_state:
+    st.session_state.nom_emp_validado = None
+
+if 'empresa_validada' not in st.session_state:
+    st.session_state.empresa_validada = None
+
+if 'regional_validada' not in st.session_state:
+    st.session_state.regional_validada = None
 
 # ── ESTILOS ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -112,6 +128,14 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     margin-bottom: 0.5rem;
 }
 
+.emp-info-card {
+    background: #F0F7FF;
+    border: 1px solid #BFDBFE;
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
 .carrito-item {
     background: #FFFFFF;
     border-radius: 10px;
@@ -136,10 +160,10 @@ if USING_SHEETS:
         st.error("❌ No se pudo cargar el inventario de Google Sheets.")
         st.stop()
 else:
-    if not os.path.exists(PATH_INV_SISTEMA):
+    if not os.path.exists("data/inventario_maestro.xlsx"):
         st.error("⚠️ No se ha detectado el Inventario Maestro.")
         st.stop()
-    df_inv = pd.read_excel(PATH_INV_SISTEMA)
+    df_inv = pd.read_excel("data/inventario_maestro.xlsx")
 
 render_nav(active_page='registro', inventario_df=df_inv)
 
@@ -178,99 +202,133 @@ with tab_form:
     col_form, col_info = st.columns([3, 2], gap="large")
 
     with col_form:
-        st.markdown('<div class="section-title">Datos del Empleado</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Validación de Empleado</div>', unsafe_allow_html=True)
 
-        with st.form("registro_operativo"):
-            c1, c2 = st.columns(2)
-            cod_emp = c1.text_input("Código de Empleado", placeholder="Ej: EMP-001")
-            nom_emp = c2.text_input("Nombre Completo", placeholder="Nombre y apellido")
+        # ── FORM PARA VALIDAR EMPLEADO ──────────────────────────────────────
+        with st.form("validar_empleado_form"):
+            cod_inp = st.text_input(
+                "Código de Empleado",
+                placeholder="Ej: E0200491",
+                value="" if not st.session_state.emp_validado else st.session_state.cod_emp_validado
+            ).upper().strip()
+            
+            if st.form_submit_button("✅ Validar Empleado", use_container_width=True):
+                if cod_inp:
+                    datos = obtener_datos_empleado(cod_inp)
+                    
+                    if datos.get('encontrado'):
+                        st.session_state.emp_validado = True
+                        st.session_state.cod_emp_validado = cod_inp
+                        st.session_state.nom_emp_validado = datos['nombre']
+                        st.session_state.empresa_validada = datos['empresa']
+                        st.session_state.regional_validada = datos['regional']
+                        st.success(f"✅ Empleado encontrado: {datos['nombre']}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Código '{cod_inp}' no encontrado en la base de datos.")
+                else:
+                    st.error("⚠️ Ingresa un código de empleado.")
 
+        # ── MOSTRAR DATOS DEL EMPLEADO VALIDADO ─────────────────────────────
+        if st.session_state.emp_validado:
+            st.markdown("""
+            <div class="emp-info-card">
+                <strong>✅ Empleado Validado</strong><br>
+                <small>
+            """ + f"""
+                👤 <strong>{st.session_state.nom_emp_validado or 'N/A'}</strong><br>
+                🏢 Empresa: <strong>{st.session_state.empresa_validada or 'N/A'}</strong><br>
+                🌍 Regional: <strong>{st.session_state.regional_validada or 'N/A'}</strong><br>
+                🔖 Código: <strong>{st.session_state.cod_emp_validado or 'N/A'}</strong>
+            </small></div>
+            """, unsafe_allow_html=True)
+
+            if st.button("🔄 Cambiar Empleado"):
+                st.session_state.emp_validado = False
+                st.session_state.carrito = []
+                st.rerun()
+
+            # ── SELECCIÓN DE PRODUCTOS (solo si hay empleado validado) ──────
             st.markdown('<div class="section-title">Selección de Producto</div>', unsafe_allow_html=True)
 
-            # Obtener lista de productos según estructura
-            if "Nombre Producto" in df_inv.columns:
-                lista_prods = df_inv["Nombre Producto"].dropna().tolist()
-            elif len(df_inv.columns) > 2:
-                lista_prods = df_inv.iloc[:, 2].dropna().tolist()
-            else:
-                lista_prods = []
-
-            prod_sel = st.selectbox(
-                "Producto",
-                options=lista_prods,
-                index=None,
-                placeholder="Escribe para filtrar...",
-                label_visibility="collapsed"
-            )
-
-            cant = st.number_input("Cantidad a pedir", min_value=1, step=1, value=1)
-
-            # BOTÓN PARA AÑADIR AL CARRITO
-            btn_col1, btn_col2 = st.columns([2, 1])
-            with btn_col1:
-                btn_agregar = st.form_submit_button("➕ Añadir al Carrito", use_container_width=True)
-
-            if btn_agregar:
-                if prod_sel and cod_emp and nom_emp:
-                    # Buscar fila del producto
-                    if "Nombre Producto" in df_inv.columns:
-                        fila_p = df_inv[df_inv["Nombre Producto"] == prod_sel].iloc[0]
-                    else:
-                        fila_p = df_inv[df_inv.iloc[:, 2] == prod_sel].iloc[0]
-                    
-                    # Obtener stock (flexible para diferentes columnas)
-                    stock_col = "Stock" if "Stock" in df_inv.columns else df_inv.columns[3]
-                    stock_actual = fila_p[stock_col]
-                    
-                    # Validar stock considerando lo que ya está en el carrito
-                    cant_en_carrito = sum(item['cantidad'] for item in st.session_state.carrito if item['producto'] == prod_sel)
-                    
-                    if validar_stock(cant + cant_en_carrito, stock_actual):
-                        st.session_state.carrito.append({
-                            "producto": prod_sel,
-                            "cantidad": int(cant),
-                            "fila_data": fila_p,
-                            "subtotal": float(fila_p.iloc[4]) * int(cant) if len(fila_p) > 4 else 0
-                        })
-                        st.toast(f"✅ Agregado: {prod_sel}")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Stock insuficiente. Solo quedan **{int(stock_actual)}** unidades.")
+            with st.form("registro_operativo"):
+                if "Nombre Producto" in df_inv.columns:
+                    lista_prods = df_inv["Nombre Producto"].dropna().tolist()
+                elif len(df_inv.columns) > 2:
+                    lista_prods = df_inv.iloc[:, 2].dropna().tolist()
                 else:
-                    st.warning("⚠️ Completa todos los campos.")
+                    lista_prods = []
 
-        # --- VISUALIZACIÓN DEL CARRITO ---
-        if st.session_state.carrito:
-            st.markdown('<div class="section-title">Tu Pedido Actual</div>', unsafe_allow_html=True)
-            
-            for i, item in enumerate(st.session_state.carrito):
-                with st.container():
-                    c_prod, c_cant, c_price, c_del = st.columns([3, 1, 1.5, 0.5])
-                    c_prod.write(f"**{item['producto']}**")
-                    c_cant.write(f"{item['cantidad']} ud.")
-                    c_price.write(f"Bs {item['subtotal']:,.2f}")
-                    if c_del.button("❌", key=f"del_{i}", use_container_width=True):
-                        st.session_state.carrito.pop(i)
-                        st.rerun()
+                prod_sel = st.selectbox(
+                    "Producto",
+                    options=lista_prods,
+                    index=None,
+                    placeholder="Escribe para filtrar...",
+                    label_visibility="collapsed"
+                )
 
-            st.write("---")
-            monto_total_carrito = sum(item['subtotal'] for item in st.session_state.carrito)
-            st.markdown(f"### Total Pedido: Bs {monto_total_carrito:,.2f}")
+                cant = st.number_input("Cantidad a pedir", min_value=1, step=1, value=1)
 
-            # BOTÓN FINALIZAR TODO EL PEDIDO
-            if st.button("✅  CONFIRMAR Y ENVIAR TODO EL PEDIDO", type="primary", use_container_width=True):
-                if cod_emp and nom_emp:
+                btn_col1, btn_col2 = st.columns([2, 1])
+                with btn_col1:
+                    btn_agregar = st.form_submit_button("➕ Añadir al Carrito", use_container_width=True)
+
+                if btn_agregar:
+                    if prod_sel:
+                        if "Nombre Producto" in df_inv.columns:
+                            fila_p = df_inv[df_inv["Nombre Producto"] == prod_sel].iloc[0]
+                        else:
+                            fila_p = df_inv[df_inv.iloc[:, 2] == prod_sel].iloc[0]
+                        
+                        stock_col = "Stock" if "Stock" in df_inv.columns else df_inv.columns[3]
+                        stock_actual = fila_p[stock_col]
+                        
+                        cant_en_carrito = sum(item['cantidad'] for item in st.session_state.carrito if item['producto'] == prod_sel)
+                        
+                        if validar_stock(cant + cant_en_carrito, stock_actual):
+                            st.session_state.carrito.append({
+                                "producto": prod_sel,
+                                "cantidad": int(cant),
+                                "fila_data": fila_p,
+                                "subtotal": float(fila_p.iloc[4]) * int(cant) if len(fila_p) > 4 else 0
+                            })
+                            st.toast(f"✅ Agregado: {prod_sel}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Stock insuficiente. Solo quedan **{int(stock_actual)}** unidades.")
+                    else:
+                        st.warning("⚠️ Selecciona un producto.")
+
+            # ── VISUALIZACIÓN DEL CARRITO ───────────────────────────────────
+            if st.session_state.carrito:
+                st.markdown('<div class="section-title">Tu Pedido Actual</div>', unsafe_allow_html=True)
+                
+                for i, item in enumerate(st.session_state.carrito):
+                    with st.container():
+                        c_prod, c_cant, c_price, c_del = st.columns([3, 1, 1.5, 0.5])
+                        c_prod.write(f"**{item['producto']}**")
+                        c_cant.write(f"{item['cantidad']} ud.")
+                        c_price.write(f"Bs {item['subtotal']:,.2f}")
+                        if c_del.button("❌", key=f"del_{i}", use_container_width=True):
+                            st.session_state.carrito.pop(i)
+                            st.rerun()
+
+                st.write("---")
+                monto_total_carrito = sum(item['subtotal'] for item in st.session_state.carrito)
+                st.markdown(f"### Total Pedido: Bs {monto_total_carrito:,.2f}")
+
+                # BOTÓN FINALIZAR PEDIDO
+                if st.button("✅  CONFIRMAR Y ENVIAR TODO EL PEDIDO", type="primary", use_container_width=True):
                     try:
                         if USING_SHEETS:
-                            # Preparar items para Google Sheets
                             items_para_sheets = []
                             for item in st.session_state.carrito:
                                 fila = item['fila_data']
-                                codigo_prod = str(fila.get("Código Producto", fila.iloc[1]) if hasattr(fila, 'get') else fila.iloc[1])
-                                precio_unit = float(fila.get("Precio Unitario", fila.iloc[4]) if hasattr(fila, 'get') else fila.iloc[4])
-                                linea = str(fila.get("Línea", fila.iloc[0]) if hasattr(fila, 'get') else fila.iloc[0])
-                                empresa = str(fila.get("Empresa", fila.iloc[5]) if hasattr(fila, 'get') else fila.iloc[5])
-                                stock = int(fila.get("Stock", fila.iloc[3]) if hasattr(fila, 'get') else fila.iloc[3])
+                                codigo_prod = str(fila["Código Producto"] if "Código Producto" in fila.index else fila.iloc[1])
+                                precio_unit = float(fila["Precio Unitario"] if "Precio Unitario" in fila.index else fila.iloc[4])
+                                linea = str(fila["Línea"] if "Línea" in fila.index else fila.iloc[0])
+                                empresa = st.session_state.empresa_validada or str(fila.get("Empresa", fila.iloc[5]) if "Empresa" in fila.index else fila.iloc[5])
+                                stock = int(fila["Stock"] if "Stock" in fila.index else fila.iloc[3])
                                 
                                 items_para_sheets.append({
                                     "codigo_producto": codigo_prod,
@@ -283,38 +341,47 @@ with tab_form:
                                     "empresa": empresa
                                 })
                             
-                            if guardar_pedido_sheets(cod_emp, nom_emp, items_para_sheets, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME):
+                            if guardar_pedido_sheets(st.session_state.cod_emp_validado, st.session_state.nom_emp_validado, items_para_sheets, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME):
+                                
+                                for item in items_para_sheets:
+                                    actualizar_stock_sheets(
+                                        codigo_producto=item['codigo_producto'],
+                                        cantidad_a_restar=item['cantidad'],
+                                        url_sheet=INVENTARIO_SHEET_URL,
+                                        hoja=INVENTARIO_HOJA_NAME
+                                    )
+                                
                                 st.session_state.carrito = []
-                                st.success(f"✅ Pedido guardado para: {nom_emp}")
+                                st.cache_data.clear()
+                                st.success("✅ Pedido guardado y stock actualizado en la nube.")
                                 st.rerun()
                             else:
                                 st.error("❌ Error al guardar pedido en Google Sheets")
                         else:
-                            # Usar Excel local
                             for item in st.session_state.carrito:
-                                nueva_fila = preparar_fila_pedido(cod_emp, nom_emp, item['fila_data'], item['cantidad'])
+                                nueva_fila = preparar_fila_pedido(st.session_state.cod_emp_validado, st.session_state.nom_emp_validado, item['fila_data'], item['cantidad'])
                                 guardar_pedido(nueva_fila)
                                 actualizar_stock_inventario(item['fila_data'].iloc[1], item['cantidad'])
                             
                             st.session_state.carrito = []
-                            st.success(f"✅ Pedido guardado para: {nom_emp}")
+                            st.success(f"✅ Pedido guardado para: {st.session_state.nom_emp_validado}")
                             st.rerun()
                     except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
-                else:
-                    st.error("⚠️ Faltan datos del empleado (Nombre o Código).")
+                        st.error(f"❌ Error en el proceso: {str(e)}")
+
+        else:
+            st.info("👆 Valida un empleado para comenzar a registrar pedidos.")
 
     # ── Panel lateral informativo ──────────────────────────────────────────
     with col_info:
         st.markdown('<div class="section-title">Vista Previa del Producto</div>', unsafe_allow_html=True)
 
-        if prod_sel:
+        if st.session_state.emp_validado and 'prod_sel' in locals() and prod_sel:
             if "Nombre Producto" in df_inv.columns:
                 fila_preview = df_inv[df_inv["Nombre Producto"] == prod_sel].iloc[0]
             else:
                 fila_preview = df_inv[df_inv.iloc[:, 2] == prod_sel].iloc[0]
             
-            # Obtener datos con flexibilidad
             stock_col = "Stock" if "Stock" in df_inv.columns else df_inv.columns[3]
             precio_col = "Precio Unitario" if "Precio Unitario" in df_inv.columns else df_inv.columns[4]
             codigo_col = "Código Producto" if "Código Producto" in df_inv.columns else df_inv.columns[1]
@@ -354,7 +421,6 @@ with tab_form:
             <div style="margin-top:0.75rem">{stock_badge}</div>
             """, unsafe_allow_html=True)
 
-            # Total estimado
             if cant and cant > 0:
                 total_est = cant * precio_prev
                 st.markdown(f"""
@@ -379,8 +445,8 @@ with tab_historial:
     if USING_SHEETS:
         df_p = obtener_todos_pedidos_sheets(PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME)
     else:
-        if os.path.exists(PATH_PEDIDOS):
-            df_p = pd.read_excel(PATH_PEDIDOS)
+        if os.path.exists("data/consolidado_pedidos.xlsx"):
+            df_p = pd.read_excel("data/consolidado_pedidos.xlsx")
         else:
             df_p = pd.DataFrame()
 
@@ -395,35 +461,8 @@ with tab_historial:
         </div>
         """, unsafe_allow_html=True)
 
-        # Herramienta de corrección
-        with st.expander("🗑️  Herramienta de Corrección — Eliminar Registro"):
-            st.warning("Al eliminar un registro, las unidades se **devolverán automáticamente** al inventario.")
-
-            id_a_borrar = st.selectbox(
-                "Registro a anular:",
-                options=df_p.index,
-                format_func=lambda x: (
-                    f"#{x}  |  {df_p.loc[x, 'Nombre Empleado']}  →  "
-                    f"{df_p.loc[x, 'Nombre Producto']}  ({df_p.loc[x, 'Cantidad']} un.)"
-                )
-            )
-
-            if st.button("🗑️ Confirmar eliminación"):
-                if not USING_SHEETS:
-                    cod_prod_borrar = df_p.loc[id_a_borrar, "Código Producto"]
-                    cant_borrar = df_p.loc[id_a_borrar, "Cantidad"]
-                    actualizar_stock_inventario(cod_prod_borrar, -cant_borrar)
-                    df_p_nuevo = df_p.drop(id_a_borrar)
-                    df_p_nuevo.to_excel(PATH_PEDIDOS, index=False)
-                    st.success(f"Registro eliminado. Stock restaurado.")
-                else:
-                    st.info("⚠️ Para eliminar registros de Google Sheets, hazlo manualmente en la hoja.")
-                st.rerun()
-
-        # Mostrar tabla de pedidos
         st.dataframe(df_p, use_container_width=True, height=400)
 
-        # Botón de descarga
         try:
             csv = df_p.to_csv(index=False, encoding='utf-8-sig')
             st.download_button(

@@ -1,165 +1,186 @@
 import streamlit as st
 import pandas as pd
-import json
 import os
+import base64
 from datetime import datetime
-from src.nav import render_nav
 
-st.set_page_config(page_title="Dashboard de Pedidos", layout="wide", page_icon="📊")
+# ── CONFIGURACIÓN DE PÁGINA ──────────────────────────────────────────────────
+st.set_page_config(page_title="Dashboard General - PROESA", layout="wide", page_icon="📊")
 
-PATH_PEDIDOS_XLSX = "data/consolidado_pedidos.xlsx"
-PATH_PEDIDOS_JSON = "data/pedidos_empleados.json"
-PATH_INV = "data/inventario_maestro.xlsx"
-
-# ── Verificaciones ──────────────────────────────────────────────────────────
-if not os.path.exists(PATH_INV):
-    st.error("⚠️ Inventario no disponible")
+# ── IMPORTACIONES DE CONFIGURACIÓN Y NAVEGACIÓN ──────────────────────────────
+try:
+    from config import (
+        INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME, 
+        PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME
+    )
+    from src.sheets import obtener_inventario_sheets, obtener_todos_pedidos_sheets
+    from src.nav import render_nav
+    CONFIG_LOADED = True
+except ImportError as e:
+    st.error(f"❌ Error de configuración: {e}")
     st.stop()
 
-df_inv = pd.read_excel(PATH_INV)
+# ── ESTILOS PERSONALIZADOS (UI/UX) ───────────────────────────────────────────
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap');
+    html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+    .stMetric {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        border-left: 5px solid #E63946;
+    }
+    .main-title {
+        color: #1A1A2E;
+        font-weight: 700;
+        font-size: 2.2rem;
+        margin-bottom: 0.5rem;
+    }
+    .subtitle {
+        color: #6B7280;
+        margin-bottom: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ── CARGA DE DATOS DESDE GOOGLE SHEETS ───────────────────────────────────────
+@st.cache_data(ttl=60) # El dashboard se actualiza cada 1 minuto
+def cargar_datos_dashboard():
+    inv = obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
+    pedidos = obtener_todos_pedidos_sheets(PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME)
+    return inv, pedidos
+
+df_inv, df_pedidos = cargar_datos_dashboard()
+
+# Renderizar navegación
 render_nav(active_page='dashboard', inventario_df=df_inv)
 
-st.title("📊 Dashboard de Pedidos")
-st.write("Vista consolidada: pedidos manuales + pedidos de empleados")
+# ── ENCABEZADO ───────────────────────────────────────────────────────────────
+st.markdown('<h1 class="main-title">📊 Panel de Control General</h1>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">Análisis en tiempo real de inventarios y pedidos consolidados en la nube.</p>', unsafe_allow_html=True)
 
-# ── Cargar datos ────────────────────────────────────────────────────────────
-# Pedidos manuales (Excel)
-pedidos_manuales = pd.DataFrame()
-if os.path.exists(PATH_PEDIDOS_XLSX):
-    pedidos_manuales = pd.read_excel(PATH_PEDIDOS_XLSX)
-    pedidos_manuales['fuente'] = 'Manual (Trade Marketing)'
+if df_pedidos.empty:
+    st.info("ℹ️ No se encontraron pedidos registrados en Google Sheets.")
+    st.stop()
 
-# Pedidos de empleados (JSON)
-pedidos_empleados = []
-if os.path.exists(PATH_PEDIDOS_JSON):
-    try:
-        with open(PATH_PEDIDOS_JSON, "r", encoding="utf-8") as f:
-            pedidos_json = json.load(f)
-            # Convertir a DataFrame
-            for pedido in pedidos_json:
-                for item in pedido['items']:
-                    pedidos_empleados.append({
-                        'Fecha Registro': pedido['fecha'],
-                        'Código Empleado': pedido['cod_emp'],
-                        'Nombre Empleado': pedido['nom_emp'],
-                        'Código Producto': item['codigo'],
-                        'Nombre Producto': item['producto'],
-                        'Cantidad': item['cantidad'],
-                        'Monto Uni': item['precio'],
-                        'Empresa': 'PROESA',
-                        'fuente': 'Empleado (Self-Service)',
-                        'pedido_id': pedido['id'],
-                        'estado': pedido.get('estado', 'Pendiente')
-                    })
-    except:
-        pass
+# ── MÉTRICAS CLAVE (KPIs) ─────────────────────────────────────────────────────
+st.markdown("### Resumen de Operaciones")
+m1, m2, m3, m4 = st.columns(4)
 
-if pedidos_empleados:
-    df_empleados = pd.DataFrame(pedidos_empleados)
-else:
-    df_empleados = pd.DataFrame()
+with m1:
+    total_p = len(df_pedidos)
+    st.metric("Total Pedidos", f"{total_p:,}")
 
-# ── Consolidar ──────────────────────────────────────────────────────────────
-if not pedidos_manuales.empty and not df_empleados.empty:
-    # Alinear columnas
-    cols_comunes = ['Código Empleado', 'Nombre Empleado', 'Código Producto', 
-                    'Nombre Producto', 'Cantidad', 'Monto Uni', 'Fecha Registro', 'fuente']
-    pedidos_manuales['estado'] = 'Registrado'
-    pedidos_manuales['pedido_id'] = pedidos_manuales.index.astype(str)
-    
-    df_consolidado = pd.concat([
-        pedidos_manuales[cols_comunes + ['estado', 'pedido_id']],
-        df_empleados[cols_comunes + ['estado', 'pedido_id']]
-    ], ignore_index=True)
-elif not pedidos_manuales.empty:
-    df_consolidado = pedidos_manuales.copy()
-elif not df_empleados.empty:
-    df_consolidado = df_empleados.copy()
-else:
-    df_consolidado = pd.DataFrame()
+with m2:
+    # Asegurar que cantidad sea numérica
+    df_pedidos['Cantidad'] = pd.to_numeric(df_pedidos['Cantidad'], errors='coerce').fillna(0)
+    total_u = int(df_pedidos['Cantidad'].sum())
+    st.metric("Unidades Movidas", f"{total_u:,} ud.")
 
-# ── Métricas ────────────────────────────────────────────────────────────────
-if not df_consolidado.empty:
-    col1, col2, col3, col4 = st.columns(4)
-    
-    total_registros = len(df_consolidado)
-    total_unidades = int(df_consolidado['Cantidad'].sum()) if 'Cantidad' in df_consolidado.columns else 0
-    total_monto = df_consolidado['Monto Uni'].mul(df_consolidado['Cantidad']).sum() if 'Monto Uni' in df_consolidado.columns else 0
-    
-    manuales = len(df_consolidado[df_consolidado['fuente'] == 'Manual (Trade Marketing)']) if 'fuente' in df_consolidado.columns else 0
-    empleados = len(df_consolidado[df_consolidado['fuente'] == 'Empleado (Self-Service)']) if 'fuente' in df_consolidado.columns else 0
-    
-    col1.metric("📋 Total Registros", total_registros)
-    col2.metric("📦 Total Unidades", f"{total_unidades:,}")
-    col3.metric("💰 Monto Total", f"Bs {total_monto:,.2f}")
-    col4.metric("👥 Manuales vs Empleados", f"{manuales} vs {empleados}")
+with m3:
+    # Cálculo de monto total (Precio * Cantidad)
+    df_pedidos['Monto Uni'] = pd.to_numeric(df_pedidos['Monto Uni'], errors='coerce').fillna(0)
+    df_pedidos['Subtotal'] = df_pedidos['Monto Uni'] * df_pedidos['Cantidad']
+    total_bs = df_pedidos['Subtotal'].sum()
+    st.metric("Facturación Est.", f"Bs {total_bs:,.2f}")
 
-    st.markdown("---")
+with m4:
+    # Stock Crítico (productos con menos de 5 unidades)
+    df_inv['Stock'] = pd.to_numeric(df_inv['Stock'], errors='coerce').fillna(0)
+    criticos = len(df_inv[df_inv['Stock'] < 5])
+    st.metric("Alertas Stock", f"{criticos} SKU", delta="- Crítico" if criticos > 0 else "OK")
 
-    # ── Filtros ─────────────────────────────────────────────────────────────
-    col_filtro1, col_filtro2, col_filtro3 = st.columns(3)
-    
-    with col_filtro1:
-        fuentes = st.multiselect(
-            "Filtrar por fuente:",
-            options=df_consolidado['fuente'].unique() if 'fuente' in df_consolidado.columns else [],
-            default=df_consolidado['fuente'].unique() if 'fuente' in df_consolidado.columns else []
-        )
-    
-    with col_filtro2:
-        estados = st.multiselect(
-            "Filtrar por estado:",
-            options=df_consolidado['estado'].unique() if 'estado' in df_consolidado.columns else [],
-            default=df_consolidado['estado'].unique() if 'estado' in df_consolidado.columns else []
-        )
-    
-    with col_filtro3:
-        busqueda = st.text_input("Buscar producto o empleado:")
+st.markdown("---")
 
-    # Aplicar filtros
-    df_filtrado = df_consolidado.copy()
-    
-    if fuentes:
-        df_filtrado = df_filtrado[df_filtrado['fuente'].isin(fuentes)]
-    
-    if estados:
-        df_filtrado = df_filtrado[df_filtrado['estado'].isin(estados)]
-    
-    if busqueda:
-        df_filtrado = df_filtrado[
-            (df_filtrado['Nombre Producto'].str.contains(busqueda, case=False, na=False)) |
-            (df_filtrado['Nombre Empleado'].str.contains(busqueda, case=False, na=False))
-        ]
+# ── SECCIÓN DE FILTROS AVANZADOS ─────────────────────────────────────────────
+st.markdown("### 🔍 Filtros de Búsqueda")
+c_f1, c_f2, c_f3 = st.columns([1, 1, 2])
 
-    # ── Tabla ───────────────────────────────────────────────────────────────
-    st.markdown("### 📋 Detalle de Pedidos")
-    st.dataframe(df_filtrado, use_container_width=True, height=500)
+with c_f1:
+    # Filtro por Línea/Empresa si existen en el DF
+    opciones_emp = df_pedidos['Empresa'].unique().tolist() if 'Empresa' in df_pedidos.columns else []
+    emp_sel = st.multiselect("Filtrar por Empresa:", opciones_emp, default=opciones_emp)
 
-    # ── Exportar ────────────────────────────────────────────────────────────
-    st.markdown("---")
-    col_exp1, col_exp2 = st.columns(2)
-    
-    with col_exp1:
-        csv = df_consolidado.to_csv(index=False, encoding='utf-8-sig')
-        st.download_button(
-            label="📥 Descargar CSV (Consolidado)",
-            data=csv,
-            file_name=f"Pedidos_Consolidado_{datetime.now().strftime('%d_%m_%Y')}.csv",
-            mime="text/csv"
-        )
-    
-    with col_exp2:
-        # Exportar a Excel
-        with pd.ExcelWriter(f"temp_export.xlsx", engine='openpyxl') as writer:
-            df_consolidado.to_excel(writer, sheet_name="Todos los Pedidos", index=False)
-        
-        with open(f"temp_export.xlsx", "rb") as f:
-            st.download_button(
-                label="📥 Descargar Excel (Consolidado)",
-                data=f.read(),
-                file_name=f"Pedidos_Consolidado_{datetime.now().strftime('%d_%m_%Y')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+with c_f2:
+    # Filtro por Línea
+    opciones_linea = df_pedidos['Línea'].unique().tolist() if 'Línea' in df_pedidos.columns else []
+    linea_sel = st.multiselect("Filtrar por Línea:", opciones_linea, default=opciones_linea)
 
-else:
-    st.info("No hay pedidos registrados aún.")
+with c_f3:
+    busqueda = st.text_input("Buscar por Nombre de Empleado o Producto:", placeholder="Ej: Juan Perez / Coca Cola")
+
+# Aplicar Lógica de Filtros
+df_filtrado = df_pedidos.copy()
+
+if emp_sel:
+    df_filtrado = df_filtrado[df_filtrado['Empresa'].isin(emp_sel)]
+if linea_sel:
+    df_filtrado = df_filtrado[df_filtrado['Línea'].isin(linea_sel)]
+if busqueda:
+    df_filtrado = df_filtrado[
+        (df_filtrado['Nombre Empleado'].str.contains(busqueda, case=False, na=False)) |
+        (df_filtrado['Nombre Producto'].str.contains(busqueda, case=False, na=False))
+    ]
+
+# ── TABLA DE DATOS CONSOLIDADA ────────────────────────────────────────────────
+st.markdown("### 📋 Historial Consolidado (Google Sheets)")
+st.dataframe(
+    df_filtrado, 
+    use_container_width=True, 
+    height=450,
+    column_config={
+        "Subtotal": st.column_config.NumberColumn(format="Bs %.2f"),
+        "Monto Uni": st.column_config.NumberColumn(format="Bs %.2f"),
+        "Fecha Registro": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm")
+    }
+)
+
+# ── ANÁLISIS GRÁFICO RÁPIDO ──────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("### 📈 Análisis de Demanda")
+g1, g2 = st.columns(2)
+
+with g1:
+    st.write("**Top 5 Productos más Solicitados**")
+    top_prods = df_pedidos.groupby('Nombre Producto')['Cantidad'].sum().sort_values(ascending=False).head(5)
+    st.bar_chart(top_prods)
+
+with g2:
+    st.write("**Pedidos por Línea de Negocio**")
+    if 'Línea' in df_pedidos.columns:
+        linea_dist = df_pedidos.groupby('Línea').size()
+        st.bar_chart(linea_dist)
+
+# ── EXPORTACIÓN DE DATOS ─────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("### 📥 Reportes")
+exp_col1, exp_col2, exp_col3 = st.columns([1, 1, 2])
+
+with exp_col1:
+    # Botón para refrescar datos manualmente
+    if st.button("🔄 Actualizar Datos Ahora", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+with exp_col2:
+    # Descarga CSV
+    csv = df_filtrado.to_csv(index=False, encoding='utf-8-sig')
+    st.download_button(
+        label="📥 Descargar CSV",
+        data=csv,
+        file_name=f"Reporte_Consolidado_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+
+with exp_col3:
+    st.info("💡 Los datos mostrados corresponden a la hoja de cálculo en tiempo real de Google Sheets.")
+
+# Pie de página
+st.markdown("""
+<div style="text-align: center; color: #9CA3AF; margin-top: 3rem; font-size: 0.8rem;">
+    Sistema de Gestión Outlet PROESA v2.0 - Trade Marketing Dashboard
+</div>
+""", unsafe_allow_html=True)
