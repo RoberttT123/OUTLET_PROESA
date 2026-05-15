@@ -27,21 +27,38 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ── ESTILOS ────────────────────────────────────────────────────────────────
+# ── ESTILOS REFORZADOS PARA OCULTAR STREAMLIT ───────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@500&display=swap');
 
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .stApp { background: #F5F4F0; }
+
+/* Ajuste de contenedor principal */
 .block-container {
-    padding-top: 0.2rem !important; /* Ajusta a 0 si quieres que pegue totalmente */
+    padding-top: 0.2rem !important;
     padding-bottom: 0rem !important;
 }
+
+/* OCULTAR ELEMENTOS DE STREAMLIT TOTALMENTE */
+#MainMenu {visibility: hidden;}
+header {visibility: hidden;}
+footer {visibility: hidden !important;}
+footer:after { content:''; display:none !important; }
+[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stToolbar"] { display: none !important; }
+.stDeployButton { display: none !important; }
+
+/* Selector agresivo para el footer en Streamlit Cloud */
+div[data-testid="stAppViewContainer"] > footer { display: none !important; }
+div[class^="st-emotion-cache"] footer { display: none !important; }
+
+/* Estilos de la App */
 .hero-login {
     background: linear-gradient(135deg, #1A1A2E 0%, #0F3460 100%);
     border-radius: 20px;
-    padding: 2.5rem 2.5rem; /* Reducimos padding vertical de 2.5rem a 1rem */
+    padding: 2.5rem 2.5rem;
     margin-bottom: 2rem;
     text-align: center;
     color: white;
@@ -49,7 +66,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-height: 140px; /* Ajusta esto a la altura que quieras que tenga el bloque azul fijo */
+    min-height: 140px;
 }
 .hero-login h1 {
     font-size: 2.2rem;
@@ -112,38 +129,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     margin: 1rem 0;
     font-size: 0.9rem;
 }
-
-#MainMenu, header, footer { visibility: hidden; }
-
-/* Ocultar footer de Streamlit (Hosted with Streamlit) */
-.stAppViewContainer footer { display: none !important; }
-footer { display: none !important; }
-[data-testid="stDecoration"] { display: none !important; }
-.reportview-container footer { display: none !important; }
-
-/* Ocultar botón de deploy y otros elementos */
-[data-testid="stToolbar"] { display: none !important; }
-.stDeployButton { display: none !important; }
-
-/* Alternativa: Ocultar todo el footer area */
-div[data-testid="stAppViewContainer"] > footer { display: none !important; }
-/* 1. Fuerza la desaparición del footer y el botón de deploy */
-footer {visibility: hidden !important;}
-.stDeployButton {display:none !important;}
-
-/* 2. Elimina el espacio en blanco que queda al fondo */
-div[data-testid="stAppViewBlockContainer"] {
-    padding-bottom: 0rem !important;
-}
-
-/* 3. Oculta el contenedor de decoración superior (la línea roja/arcoíris) */
-[data-testid="stDecoration"] {
-    display: none !important;
-}
-
-/* 4. Oculta específicamente el icono de GitHub y Streamlit en el footer */
-#MainMenu {visibility: hidden;}
-header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -158,19 +143,14 @@ def get_logo_b64(path="assets/logo_proesa.png"):
 # ── SESSION STATE ───────────────────────────────────────────────────────────
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
-
 if 'cod_emp' not in st.session_state:
     st.session_state.cod_emp = None
-
 if 'nom_emp' not in st.session_state:
     st.session_state.nom_emp = None
-
 if 'empresa' not in st.session_state:
     st.session_state.empresa = None
-
 if 'regional' not in st.session_state:
     st.session_state.regional = None
-
 if 'carrito' not in st.session_state:
     st.session_state.carrito = []
 
@@ -186,13 +166,11 @@ if df_inv.empty:
     st.stop()
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PANTALLA 1: LOGIN CON VALIDACIÓN DE EMPLEADO
+# PANTALLA 1: LOGIN
 # ═════════════════════════════════════════════════════════════════════════════
-# Busca esta parte en tu código de la Pantalla 1:
 if not st.session_state.logged_in:
     logo_b64 = get_logo_b64()
     
-    # Cambia el renderizado por este:
     st.markdown(f"""
     <div class="hero-login">
         {f'<img src="data:image/png;base64,{logo_b64}" style="height:210px; width:auto; object-fit:contain; margin-top:-20px; margin-bottom:0px;">' if logo_b64 else ''}
@@ -206,9 +184,7 @@ if not st.session_state.logged_in:
         
         if st.form_submit_button("🚀 Validar Código", use_container_width=True):
             if cod_inp:
-                # VALIDAR EMPLEADO
                 datos = obtener_datos_empleado(cod_inp)
-                
                 if datos.get('encontrado'):
                     st.session_state.logged_in = True
                     st.session_state.cod_emp = cod_inp
@@ -217,7 +193,7 @@ if not st.session_state.logged_in:
                     st.session_state.regional = datos['regional']
                     st.rerun()
                 else:
-                    st.error(f"❌ Código '{cod_inp}' no encontrado. Verifica tu código de empleado.")
+                    st.error(f"❌ Código '{cod_inp}' no encontrado.")
             else:
                 st.error("⚠️ Ingresa tu código de empleado.")
 
@@ -243,8 +219,7 @@ else:
     # ── COLUMNA 1: CATÁLOGO ──────────────────────────────────────────────────
     with col_pedido:
         st.markdown('<div class="section-title">📦 Catálogo de Productos</div>', unsafe_allow_html=True)
-
-        busqueda = st.text_input("Busca un producto...", placeholder="Escribe el nombre o código para filtrar")
+        busqueda = st.text_input("Busca un producto...", placeholder="Escribe el nombre o código")
 
         if "Nombre Producto" in df_inv.columns:
             lista_prods = df_inv["Nombre Producto"].dropna().tolist()
@@ -253,156 +228,91 @@ else:
             st.stop()
 
         if busqueda:
-            # Buscar por nombre O por código
             prods_filtrados = []
             for prod_nombre in lista_prods:
                 fila_prod = df_inv[df_inv["Nombre Producto"] == prod_nombre].iloc[0]
                 codigo = str(fila_prod["Código Producto"] if "Código Producto" in fila_prod.index else fila_prod.iloc[1])
-                
-                # Si coincide con nombre O código, agregar
                 if busqueda.lower() in prod_nombre.lower() or busqueda.lower() in codigo.lower():
                     prods_filtrados.append(prod_nombre)
         else:
             prods_filtrados = lista_prods
 
         if not prods_filtrados:
-            st.info("No se encontraron productos con ese nombre.")
+            st.info("No se encontraron productos.")
         else:
-            st.caption(f"Mostrando {min(len(prods_filtrados), 5)} de {len(prods_filtrados)} productos encontrados")
-            
             for prod_nombre in prods_filtrados[:5]:  
                 fila = df_inv[df_inv["Nombre Producto"] == prod_nombre].iloc[0]
-                
                 try:
                     stock = int(float(fila["Stock"] if "Stock" in fila.index else fila.iloc[3]))
                     precio = float(fila["Precio Unitario"] if "Precio Unitario" in fila.index else fila.iloc[4])
                     codigo = str(fila["Código Producto"] if "Código Producto" in fila.index else fila.iloc[1])
-                except:
-                    continue
+                except: continue
 
-                if stock <= 0:
-                    stock_badge = '<span class="stock-out">❌ Agotado</span>'
-                    disabled = True
-                else:
-                    stock_badge = f'<span class="stock-ok">✅ {stock} disponibles</span>'
-                    disabled = False
-
+                stock_badge = f'<span class="stock-ok">✅ {stock}</span>' if stock > 0 else '<span class="stock-out">❌ Agotado</span>'
+                
                 with st.container():
                     c1, c2, c3 = st.columns([2, 1.2, 0.8])
-                    with c1:
-                        st.markdown(f"**{prod_nombre}**\n`{codigo}`")
-                    with c2:
-                        st.markdown(f"**Bs {precio:,.2f}**\n{stock_badge}", unsafe_allow_html=True)
+                    with c1: st.markdown(f"**{prod_nombre}**\n`{codigo}`")
+                    with c2: st.markdown(f"**Bs {precio:,.2f}**\n{stock_badge}", unsafe_allow_html=True)
                     with c3:
-                        if not disabled:
-                            cant = st.number_input("Cant", min_value=1, max_value=max(stock, 1), 
-                                                 value=1, key=f"qty_{codigo}")
+                        if stock > 0:
+                            cant = st.number_input("Cant", min_value=1, max_value=stock, value=1, key=f"qty_{codigo}")
                             if st.button("➕", key=f"btn_{codigo}"):
                                 st.session_state.carrito.append({
-                                    "codigo_producto": codigo,
-                                    "producto": prod_nombre,
-                                    "cantidad": int(cant),
-                                    "precio_unitario": precio,
-                                    "subtotal": precio * int(cant)
+                                    "codigo_producto": codigo, "producto": prod_nombre,
+                                    "cantidad": int(cant), "precio_unitario": precio, "subtotal": precio * int(cant)
                                 })
                                 st.rerun()
 
     # ── COLUMNA 2: CARRITO ───────────────────────────────────────────────────
     with col_carrito:
         st.markdown('<div class="section-title">🛒 Tu Carrito</div>', unsafe_allow_html=True)
-
         if st.session_state.carrito:
             for i, item in enumerate(st.session_state.carrito):
-                col_info, col_del = st.columns([4, 1])
-                
-                with col_info:
-                    st.markdown(f"""
-                    **{item['producto']}**
-                    
-                    {item['cantidad']} × Bs {item['precio_unitario']:,.2f}
-                    
-                    **Bs {item['subtotal']:,.2f}**
-                    """)
-                
-                with col_del:
+                ci, cd = st.columns([4, 1])
+                with ci: st.markdown(f"**{item['producto']}**\n{item['cantidad']} x Bs {item['precio_unitario']:,.2f} = **Bs {item['subtotal']:,.2f}**")
+                with cd:
                     if st.button("❌", key=f"del_{i}"):
                         st.session_state.carrito.pop(i)
                         st.rerun()
 
             total = sum(item['subtotal'] for item in st.session_state.carrito)
-            st.markdown(f"""
-            <div class="carrito-total">
-                <div style="font-size:0.75rem;color:#A8B2C8;margin-bottom:0.3rem">TOTAL</div>
-                <div style="font-size:2rem;font-weight:700;font-family:'DM Mono',monospace">Bs {total:,.2f}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f'<div class="carrito-total">TOTAL<br><span style="font-size:2rem">Bs {total:,.2f}</span></div>', unsafe_allow_html=True)
 
             if st.button("✅ ENVIAR PEDIDO", type="primary", use_container_width=True):
                 items_para_sheets = []
                 for item in st.session_state.carrito:
                     fila = df_inv[df_inv["Nombre Producto"] == item['producto']].iloc[0]
                     items_para_sheets.append({
-                        "codigo_producto": item['codigo_producto'],
-                        "producto": item['producto'],
-                        "cantidad": item['cantidad'],
-                        "precio_unitario": item['precio_unitario'],
+                        "codigo_producto": item['codigo_producto'], "producto": item['producto'],
+                        "cantidad": item['cantidad'], "precio_unitario": item['precio_unitario'],
                         "linea": str(fila["Línea"] if "Línea" in fila.index else fila.iloc[0]),
-                        "descuento": 0,
-                        "stock_actual": int(fila["Stock"] if "Stock" in fila.index else fila.iloc[3]),
+                        "descuento": 0, "stock_actual": int(fila["Stock"] if "Stock" in fila.index else fila.iloc[3]),
                         "empresa": st.session_state.empresa or "PROESA"
                     })
                 
-                if guardar_pedido_sheets(
-                    st.session_state.cod_emp,
-                    st.session_state.nom_emp,
-                    items_para_sheets,
-                    PEDIDOS_SHEET_URL,
-                    PEDIDOS_HOJA_NAME
-                ):
+                if guardar_pedido_sheets(st.session_state.cod_emp, st.session_state.nom_emp, items_para_sheets, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME):
                     for item in items_para_sheets:
-                        actualizar_stock_sheets(
-                            codigo_producto=item['codigo_producto'],
-                            cantidad_a_restar=item['cantidad'],
-                            url_sheet=INVENTARIO_SHEET_URL,
-                            hoja=INVENTARIO_HOJA_NAME
-                        )
-                    
+                        actualizar_stock_sheets(item['codigo_producto'], item['cantidad'], INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
                     st.session_state.carrito = []
                     st.cache_data.clear()
-                    st.success("🎉 ¡Pedido enviado y stock actualizado!")
+                    st.success("🎉 ¡Pedido enviado!")
                     st.balloons()
                     st.rerun()
-                else:
-                    st.error("❌ Error al enviar pedido.")
         else:
-            st.info("Tu carrito está vacío.\nAgrega productos a la izquierda.")
+            st.info("Carrito vacío.")
 
     # ── HISTORIAL ────────────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown('<div class="section-title">📋 Tus Pedidos Anteriores</div>', unsafe_allow_html=True)
-
-    mis_pedidos = obtener_pedidos_empleado_sheets(
-        st.session_state.cod_emp,
-        PEDIDOS_SHEET_URL,
-        PEDIDOS_HOJA_NAME
-    )
-
+    mis_pedidos = obtener_pedidos_empleado_sheets(st.session_state.cod_emp, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME)
     if not mis_pedidos.empty:
-        for _, pedido in mis_pedidos.tail(5).iterrows():
-            st.markdown(f"""
-            📦 **{pedido.get('Nombre Producto', 'N/A')}** · {pedido.get('Cantidad', 0)} ud.
-            
-            📅 {pedido.get('Fecha Registro', '')}
-            """)
-    else:
-        st.info("No has hecho pedidos aún.")
+        for _, p in mis_pedidos.tail(5).iterrows():
+            st.markdown(f"📦 **{p.get('Nombre Producto', 'N/A')}** · {p.get('Cantidad', 0)} ud. · 📅 {p.get('Fecha Registro', '')}")
+    else: st.info("Sin historial.")
 
     st.markdown("---")
     if st.button("🚪 Cerrar Sesión"):
         st.session_state.logged_in = False
         st.session_state.carrito = []
-        st.session_state.cod_emp = None
-        st.session_state.nom_emp = None
-        st.session_state.empresa = None
-        st.session_state.regional = None
         st.rerun()
