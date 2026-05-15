@@ -176,6 +176,19 @@ html, body, [class*="css"] {
 
 /* Ocultar header por defecto de streamlit */
 #MainMenu, header, footer { visibility: hidden; }
+
+/* Ocultar footer de Streamlit (Hosted with Streamlit) */
+.stAppViewContainer footer { display: none !important; }
+footer { display: none !important; }
+[data-testid="stDecoration"] { display: none !important; }
+.reportview-container footer { display: none !important; }
+
+/* Ocultar botón de deploy y otros elementos */
+[data-testid="stToolbar"] { display: none !important; }
+.stDeployButton { display: none !important; }
+
+/* Alternativa: Ocultar todo el footer area */
+div[data-testid="stAppViewContainer"] > footer { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
