@@ -34,22 +34,14 @@ st.markdown("""
 
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .stApp { background: #F5F4F0; }
-.block-container {
-    padding-top: 0.2rem !important; /* Ajusta a 0 si quieres que pegue totalmente */
-    padding-bottom: 0rem !important;
-}
+
 .hero-login {
     background: linear-gradient(135deg, #1A1A2E 0%, #0F3460 100%);
     border-radius: 20px;
-    padding: 2.5rem 2.5rem; /* Reducimos padding vertical de 2.5rem a 1rem */
+    padding: 2.5rem;
     margin-bottom: 2rem;
     text-align: center;
     color: white;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 140px; /* Ajusta esto a la altura que quieras que tenga el bloque azul fijo */
 }
 .hero-login h1 {
     font-size: 2.2rem;
@@ -115,19 +107,33 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 
 #MainMenu, header, footer { visibility: hidden; }
 
-/* Ocultar footer de Streamlit (Hosted with Streamlit) */
-.stAppViewContainer footer { display: none !important; }
-footer { display: none !important; }
-[data-testid="stDecoration"] { display: none !important; }
-.reportview-container footer { display: none !important; }
-
-/* Ocultar botón de deploy y otros elementos */
+/* Ocultar footer de Streamlit - CSS AGRESIVO */
+footer, [data-testid="stDecoration"], .reportview-container footer { display: none !important; }
 [data-testid="stToolbar"] { display: none !important; }
 .stDeployButton { display: none !important; }
-
-/* Alternativa: Ocultar todo el footer area */
-div[data-testid="stAppViewContainer"] > footer { display: none !important; }
+[class*="footer"], [class*="Footer"], [role="contentinfo"] { display: none !important; visibility: hidden !important; }
 </style>
+
+<script>
+function removeFooter() {
+    const footers = document.querySelectorAll('footer');
+    footers.forEach(f => f.remove());
+    const footerElements = document.querySelectorAll('[class*="footer"], [class*="Footer"]');
+    footerElements.forEach(el => {
+        if (el.textContent.includes('Hosted with Streamlit') || el.textContent.includes('Created by')) {
+            el.remove();
+        }
+    });
+    const allDivs = document.querySelectorAll('div');
+    allDivs.forEach(div => {
+        if (div.textContent.includes('Hosted with Streamlit')) {
+            div.style.display = 'none';
+        }
+    });
+}
+document.addEventListener('DOMContentLoaded', removeFooter);
+setInterval(removeFooter, 1000);
+</script>
 """, unsafe_allow_html=True)
 
 # ── LOGO ────────────────────────────────────────────────────────────────────
@@ -157,12 +163,16 @@ if 'regional' not in st.session_state:
 if 'carrito' not in st.session_state:
     st.session_state.carrito = []
 
-# ── CARGAR INVENTARIO ───────────────────────────────────────────────────────
-@st.cache_data(ttl=300)
+# ── CARGAR INVENTARIO (CON CACHE OPTIMIZADO) ────────────────────────────────
+@st.cache_data(ttl=600, show_spinner=False)  # Cache por 10 minutos
 def cargar_inventario():
     return obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
 
-df_inv = cargar_inventario()
+# Guardar en session_state para evitar recalcular
+if 'df_inv_cache' not in st.session_state:
+    st.session_state.df_inv_cache = cargar_inventario()
+
+df_inv = st.session_state.df_inv_cache
 
 if df_inv.empty:
     st.error("❌ No se pudo cargar el catálogo.")
@@ -171,16 +181,14 @@ if df_inv.empty:
 # ═════════════════════════════════════════════════════════════════════════════
 # PANTALLA 1: LOGIN CON VALIDACIÓN DE EMPLEADO
 # ═════════════════════════════════════════════════════════════════════════════
-# Busca esta parte en tu código de la Pantalla 1:
 if not st.session_state.logged_in:
     logo_b64 = get_logo_b64()
     
-    # Cambia el renderizado por este:
     st.markdown(f"""
     <div class="hero-login">
-        {f'<img src="data:image/png;base64,{logo_b64}" style="height:210px; width:auto; object-fit:contain; margin-top:-20px; margin-bottom:0px;">' if logo_b64 else ''}
-        <h1 style="margin-top:0;">Outlet PROESA</h1>
-        <p style="margin-bottom:0;">Sistema de Pedidos para Empleados</p>
+        {'<img src="data:image/png;base64,' + logo_b64 + '" style="height:140px;object-fit:contain;margin-bottom:1rem;">' if logo_b64 else ''}
+        <h1>Outlet PROESA</h1>
+        <p>Sistema de Pedidos para Empleados</p>
     </div>
     """, unsafe_allow_html=True)
 
