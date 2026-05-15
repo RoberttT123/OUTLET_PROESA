@@ -21,7 +21,11 @@ PATH_INV_SISTEMA = "data/inventario_maestro.xlsx"
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
-
+.block-container {
+        padding-top: 1rem !important; /* Reduce el espacio a casi nada */
+        padding-bottom: 0rem !important;
+        margin-top: -20px; /* Sube el contenido un poco más */
+    }
 html, body, [class*="css"] {
     font-family: 'DM Sans', sans-serif;
 }
@@ -173,49 +177,26 @@ html, body, [class*="css"] {
 /* Ocultar header por defecto de streamlit */
 #MainMenu, header, footer { visibility: hidden; }
 
-/* Ocultar footer de Streamlit - CSS AGRESIVO */
-footer, [data-testid="stDecoration"], .reportview-container footer { display: none !important; }
+/* Ocultar footer de Streamlit (Hosted with Streamlit) */
+.stAppViewContainer footer { display: none !important; }
+footer { display: none !important; }
+[data-testid="stDecoration"] { display: none !important; }
+.reportview-container footer { display: none !important; }
+
+/* Ocultar botón de deploy y otros elementos */
 [data-testid="stToolbar"] { display: none !important; }
 .stDeployButton { display: none !important; }
-[class*="footer"], [class*="Footer"], [role="contentinfo"] { display: none !important; visibility: hidden !important; height: 0 !important; margin: 0 !important; padding: 0 !important; }
+
+/* Alternativa: Ocultar todo el footer area */
+div[data-testid="stAppViewContainer"] > footer { display: none !important; }
 </style>
-
-<script>
-// Eliminar footer de Streamlit con JavaScript
-function removeFooter() {
-    // Método 1: Por selector
-    const footers = document.querySelectorAll('footer');
-    footers.forEach(f => f.remove());
-    
-    // Método 2: Por clase
-    const footerElements = document.querySelectorAll('[class*="footer"], [class*="Footer"]');
-    footerElements.forEach(el => {
-        if (el.textContent.includes('Hosted with Streamlit') || el.textContent.includes('Created by')) {
-            el.remove();
-        }
-    });
-    
-    // Método 3: Por contenido de texto
-    const allDivs = document.querySelectorAll('div');
-    allDivs.forEach(div => {
-        if (div.textContent.includes('Hosted with Streamlit')) {
-            div.style.display = 'none';
-        }
-    });
-}
-
-// Ejecutar al cargar
-document.addEventListener('DOMContentLoaded', removeFooter);
-// Ejecutar cada segundo (por si carga tarde)
-setInterval(removeFooter, 1000);
-</script>
 """, unsafe_allow_html=True)
 
 
 # ── HEADER HERO ─────────────────────────────────────────────────────────────
 logo_b64 = get_logo_b64()
 logo_html = (
-    f'<img src="data:image/png;base64,{logo_b64}" style="height:64px;object-fit:contain;">'
+    f'<img src="data:image/png;base64,{logo_b64}" style="height:150px;object-fit:contain;">'
     if logo_b64
     else '<div style="font-size:2.2rem">📦</div>'
 )
@@ -299,9 +280,9 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 
 # ── CATÁLOGO ─────────────────────────────────────────────────────────────────
-render_nav(active_page='inicio', inventario_df=df_inv)
-
 st.markdown('<div class="section-title">🔍 Catálogo de Productos</div>', unsafe_allow_html=True)
+
+col_filtro, col_busqueda = st.columns([1, 2])
 with col_filtro:
     empresas = ["Todas"] + sorted(df_inv[empresa_col].dropna().unique().tolist())
     filtro = st.selectbox("Empresa", empresas, label_visibility="collapsed")
