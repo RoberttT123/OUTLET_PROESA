@@ -1,0 +1,7 @@
+[client]
+showFooter = false
+showDeployButton = false
+showRunButton = true
+
+[logger]
+level = "error"
