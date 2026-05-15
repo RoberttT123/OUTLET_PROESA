@@ -72,14 +72,14 @@ def cargar_empleados():
     try:
         # Importar aquí para evitar circular imports
         from src.sheets import get_gsheet_connection
-        from config import INVENTARIO_SHEET_URL
+        from config import EMPLEADOS_SHEET_URL
         
         gc = get_gsheet_connection()
         if gc is None:
             st.error("❌ No se pudo conectar a Google Sheets para cargar empleados")
             return pd.DataFrame()
         
-        spreadsheet = gc.open_by_url(INVENTARIO_SHEET_URL)
+        spreadsheet = gc.open_by_url(EMPLEADOS_SHEET_URL)
         
         # Intenta leer hoja "Empleados"
         try:
