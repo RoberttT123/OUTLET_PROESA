@@ -4,7 +4,13 @@ import streamlit as st
 
 PATH_PEDIDOS = "data/consolidado_pedidos.xlsx"
 PATH_INV_SISTEMA = "data/inventario_maestro.xlsx"
-PATH_EMPLEADOS = "data/Empleado.xlsx"
+
+# Importar config para Google Sheets
+try:
+    from config import EMPLEADOS_SHEET_URL, EMPLEADOS_HOJA_NAME
+    USING_SHEETS_EMP = True
+except ImportError:
+    USING_SHEETS_EMP = False
 
 def limpiar_formato_latino(valor):
     """
@@ -56,27 +62,52 @@ def actualizar_stock_inventario(codigo_producto, cantidad_restar):
 
 # ── NUEVAS FUNCIONES PARA GESTIÓN DE EMPLEADOS ──────────────────────────────
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=7200)  # Cache por 2 horas (empleados cambian menos)
 def cargar_empleados():
     """
-    Carga el listado de empleados desde Empleado.xlsx
-    Estructura: Empresa | Cod_Empleado | Persona | Regional
+    Carga el listado de empleados desde Google Sheets
+    Lee de la hoja "Empleados" en la misma Google Sheet
+    Estructura esperada: Empresa | Cod_Empleado | Persona | Regional
     """
     try:
-        if not os.path.exists(PATH_EMPLEADOS):
-            st.warning(f"⚠️ Archivo '{PATH_EMPLEADOS}' no encontrado.")
+        # Importar aquí para evitar circular imports
+        from src.sheets import get_gsheet_connection
+        from config import INVENTARIO_SHEET_URL
+        
+        gc = get_gsheet_connection()
+        if gc is None:
+            st.error("❌ No se pudo conectar a Google Sheets para cargar empleados")
             return pd.DataFrame()
         
-        df_emp = pd.read_excel(PATH_EMPLEADOS, sheet_name="Empleados")
-        return df_emp
+        spreadsheet = gc.open_by_url(INVENTARIO_SHEET_URL)
+        
+        # Intenta leer hoja "Empleados"
+        try:
+            worksheet = spreadsheet.worksheet("Empleados")
+            data = worksheet.get_all_records()
+            df_emp = pd.DataFrame(data)
+            
+            if df_emp.empty:
+                st.warning("⚠️ La hoja 'Empleados' está vacía")
+                return pd.DataFrame()
+            
+            # Normalizar códigos de empleado al cargar
+            df_emp['Cod_Empleado'] = df_emp['Cod_Empleado'].astype(str).str.strip().str.upper()
+            return df_emp
+            
+        except Exception as e:
+            st.error(f"❌ No se encontró la hoja 'Empleados' en Google Sheets: {e}")
+            return pd.DataFrame()
+            
     except Exception as e:
-        st.error(f"Error cargando empleados: {e}")
+        st.error(f"Error cargando empleados desde Google Sheets: {e}")
         return pd.DataFrame()
 
 
 def obtener_datos_empleado(cod_empleado):
     """
     Busca un empleado por código y devuelve sus datos.
+    Optimizado para búsqueda rápida.
     
     Retorna:
         dict con claves: 'nombre', 'empresa', 'regional', 'encontrado'
@@ -87,10 +118,12 @@ def obtener_datos_empleado(cod_empleado):
     if df_emp.empty:
         return {'encontrado': False, 'error': 'No se pudo cargar la lista de empleados'}
     
-    # Buscar por código (flexible con espacios)
-    df_emp['Cod_Empleado'] = df_emp['Cod_Empleado'].astype(str).str.strip().str.upper()
+    # Búsqueda directa sin conversiones innecesarias
+    cod_busqueda = cod_empleado.strip().upper()
     
-    empleado = df_emp[df_emp['Cod_Empleado'] == cod_empleado.strip().upper()]
+    # Usar .loc para búsqueda O masking booleano (más rápido que isin)
+    mascara = df_emp['Cod_Empleado'] == cod_busqueda
+    empleado = df_emp[mascara]
     
     if empleado.empty:
         return {'encontrado': False}
