@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import pytz  # Librería para manejar zonas horarias
 
 try:
     import gspread
@@ -64,9 +65,14 @@ def guardar_pedido_sheets(
     hoja: str = "Pedidos",
     timestamp: str = None
 ):
-    """Guarda un pedido en Google Sheets con la estructura personalizada."""
+    """Guarda un pedido en Google Sheets con la estructura personalizada y hora de Bolivia."""
     if timestamp is None:
-        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        # --- CORRECCIÓN DE HORA ---
+        # Definimos la zona horaria de Bolivia (GMT-4)
+        tz_bo = pytz.timezone('America/La_Paz')
+        # Obtenemos la hora actual en esa zona específica
+        timestamp = datetime.now(tz_bo).strftime("%d/%m/%Y %H:%M:%S")
+        # --------------------------
     
     try:
         gc = get_gsheet_connection()
@@ -90,7 +96,7 @@ def guardar_pedido_sheets(
                 item['cantidad'],                  # Cantidad
                 item.get('stock_actual', 0),       # Stock Actual
                 item.get('empresa', ''),           # Empresa
-                timestamp                          # Fecha Registro
+                timestamp                          # Fecha Registro (Ya corregida)
             ]
             filas_a_agregar.append(fila)
         
@@ -156,16 +162,18 @@ def actualizar_stock_sheets(codigo_producto: str, cantidad_a_restar: int, url_sh
         spreadsheet = gc.open_by_url(url_sheet)
         worksheet = spreadsheet.worksheet(hoja)
         
-        # 1. Buscar la columna de 'Código Producto' (suponiendo que es la B / índice 2)
-        # y la columna de 'Stock' (suponiendo que es la D / índice 4)
-        lista_codigos = worksheet.col_values(2) # Columna B
+        # 1. Obtener todos los valores de la columna 'Código Producto' (Columna B / Índice 2)
+        lista_codigos = worksheet.col_values(2)
         
         if codigo_producto in lista_codigos:
             # Encontrar el índice de la fila (gspread usa base 1)
             row_idx = lista_codigos.index(codigo_producto) + 1
             
-            # 2. Obtener el valor actual del stock (Columna D es la 4)
-            stock_actual = int(worksheet.cell(row_idx, 4).value)
+            # 2. Obtener el valor actual del stock (Columna D / Índice 4)
+            # Usamos cell().value para asegurar precisión antes de la resta
+            valor_celda = worksheet.cell(row_idx, 4).value
+            stock_actual = int(float(valor_celda)) if valor_celda else 0
+            
             nuevo_stock = stock_actual - cantidad_a_restar
             
             # 3. Actualizar la celda con el nuevo valor
@@ -180,7 +188,7 @@ def actualizar_stock_sheets(codigo_producto: str, cantidad_a_restar: int, url_sh
         return False
 
 
-# Headers esperados
+# Headers esperados para referencia de estructura
 INVENTARIO_HEADERS = [
     "Línea", "Código Producto", "Nombre Producto", 
     "Stock", "Precio Unitario", "Empresa"
