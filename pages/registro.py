@@ -21,33 +21,27 @@ if USING_SHEETS:
         obtener_inventario_sheets,
         obtener_todos_pedidos_sheets,
         guardar_pedido_sheets,
-        actualizar_stock_sheets
+        actualizar_stock_batch_sheets,   # ← función batch nueva (ver sheets_additions.py)
     )
 else:
     from src.database import guardar_pedido, actualizar_stock_inventario
     PATH_INV_SISTEMA = "data/inventario_maestro.xlsx"
-    PATH_PEDIDOS = "data/consolidado_pedidos.xlsx"
+    PATH_PEDIDOS     = "data/consolidado_pedidos.xlsx"
 
 st.set_page_config(page_title="Registro de Pedidos", layout="wide", page_icon="📝")
 
-# ── INICIALIZACIÓN DEL CARRITO ──────────────────────────────────────────────
-if 'carrito' not in st.session_state:
-    st.session_state.carrito = []
-
-if 'emp_validado' not in st.session_state:
-    st.session_state.emp_validado = False
-
-if 'cod_emp_validado' not in st.session_state:
-    st.session_state.cod_emp_validado = None
-
-if 'nom_emp_validado' not in st.session_state:
-    st.session_state.nom_emp_validado = None
-
-if 'empresa_validada' not in st.session_state:
-    st.session_state.empresa_validada = None
-
-if 'regional_validada' not in st.session_state:
-    st.session_state.regional_validada = None
+# ── INICIALIZACIÓN DEL SESSION STATE ────────────────────────────────────────
+defaults = {
+    'carrito':          [],
+    'emp_validado':     False,
+    'cod_emp_validado': None,
+    'nom_emp_validado': None,
+    'empresa_validada': None,
+    'regional_validada': None,
+}
+for key, val in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
 # ── ESTILOS ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -58,7 +52,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 
 .stApp { background: #F5F4F0; }
 .block-container {
-    padding-top: 0.2rem !important; /* Ajusta a 0 si quieres que pegue totalmente */
+    padding-top: 0.2rem !important;
     padding-bottom: 0rem !important;
 }
 .page-header {
@@ -149,28 +143,22 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 }
 
 #MainMenu, header, footer { visibility: hidden; }
-
-/* Ocultar footer de Streamlit (Hosted with Streamlit) */
 .stAppViewContainer footer { display: none !important; }
 footer { display: none !important; }
 [data-testid="stDecoration"] { display: none !important; }
 .reportview-container footer { display: none !important; }
-
-/* Ocultar botón de deploy y otros elementos */
 [data-testid="stToolbar"] { display: none !important; }
 .stDeployButton { display: none !important; }
-
-/* Alternativa: Ocultar todo el footer area */
 div[data-testid="stAppViewContainer"] > footer { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
 # ── VERIFICACIÓN Y CARGA DE DATOS ───────────────────────────────────────────
 if USING_SHEETS:
-    @st.cache_data(ttl=300)
+    @st.cache_data(ttl=300, show_spinner=False)
     def cargar_inventario():
         return obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
-    
+
     df_inv = cargar_inventario()
     if df_inv.empty:
         st.error("❌ No se pudo cargar el inventario de Google Sheets.")
@@ -183,7 +171,23 @@ else:
 
 render_nav(active_page='registro', inventario_df=df_inv)
 
+# ── PRE-CALCULAR COLUMNAS UNA SOLA VEZ ──────────────────────────────────────
+COL_NOMBRE  = "Nombre Producto"  if "Nombre Producto"  in df_inv.columns else df_inv.columns[2]
+COL_CODIGO  = "Código Producto"  if "Código Producto"  in df_inv.columns else df_inv.columns[1]
+COL_STOCK   = "Stock"            if "Stock"            in df_inv.columns else df_inv.columns[3]
+COL_PRECIO  = "Precio Unitario"  if "Precio Unitario"  in df_inv.columns else df_inv.columns[4]
+COL_LINEA   = "Línea"            if "Línea"            in df_inv.columns else df_inv.columns[0]
+COL_EMPRESA = "Empresa"          if "Empresa"          in df_inv.columns else df_inv.columns[5]
+
+# Índice nombre→fila para búsqueda O(1) sin filtrar el df cada vez
+@st.cache_data(show_spinner=False)
+def construir_indice(_shape_key):
+    return {row[COL_NOMBRE]: row for _, row in df_inv.iterrows() if pd.notna(row[COL_NOMBRE])}
+
+indice_productos = construir_indice(str(df_inv.shape))
+
 # ── LOGO ────────────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
 def get_logo_b64(path="assets/logo_proesa.png"):
     try:
         with open(path, "rb") as f:
@@ -211,6 +215,7 @@ st.markdown(f"""
 # ── TABS ────────────────────────────────────────────────────────────────────
 tab_form, tab_historial = st.tabs(["🛒  Nuevo Pedido", "📊  Historial"])
 
+
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 1 — NUEVO PEDIDO CON CARRITO
 # ════════════════════════════════════════════════════════════════════════════
@@ -227,16 +232,15 @@ with tab_form:
                 placeholder="Ej: E0200491",
                 value="" if not st.session_state.emp_validado else st.session_state.cod_emp_validado
             ).upper().strip()
-            
+
             if st.form_submit_button("✅ Validar Empleado", use_container_width=True):
                 if cod_inp:
                     datos = obtener_datos_empleado(cod_inp)
-                    
                     if datos.get('encontrado'):
-                        st.session_state.emp_validado = True
-                        st.session_state.cod_emp_validado = cod_inp
-                        st.session_state.nom_emp_validado = datos['nombre']
-                        st.session_state.empresa_validada = datos['empresa']
+                        st.session_state.emp_validado      = True
+                        st.session_state.cod_emp_validado  = cod_inp
+                        st.session_state.nom_emp_validado  = datos['nombre']
+                        st.session_state.empresa_validada  = datos['empresa']
                         st.session_state.regional_validada = datos['regional']
                         st.success(f"✅ Empleado encontrado: {datos['nombre']}")
                         st.rerun()
@@ -245,50 +249,43 @@ with tab_form:
                 else:
                     st.error("⚠️ Ingresa un código de empleado.")
 
-        # ── MOSTRAR DATOS DEL EMPLEADO VALIDADO ─────────────────────────────
+        # ── DATOS DEL EMPLEADO VALIDADO ──────────────────────────────────────
         if st.session_state.emp_validado:
-            st.markdown("""
+            st.markdown(f"""
             <div class="emp-info-card">
                 <strong>✅ Empleado Validado</strong><br>
                 <small>
-            """ + f"""
                 👤 <strong>{st.session_state.nom_emp_validado or 'N/A'}</strong><br>
                 🏢 Empresa: <strong>{st.session_state.empresa_validada or 'N/A'}</strong><br>
                 🌍 Regional: <strong>{st.session_state.regional_validada or 'N/A'}</strong><br>
                 🔖 Código: <strong>{st.session_state.cod_emp_validado or 'N/A'}</strong>
-            </small></div>
+                </small>
+            </div>
             """, unsafe_allow_html=True)
 
             if st.button("🔄 Cambiar Empleado"):
                 st.session_state.emp_validado = False
-                st.session_state.carrito = []
+                st.session_state.carrito      = []
                 st.rerun()
 
-            # ── SELECCIÓN DE PRODUCTOS (solo si hay empleado validado) ──────
+            # ── SELECCIÓN DE PRODUCTOS ──────────────────────────────────────
             st.markdown('<div class="section-title">Selección de Producto</div>', unsafe_allow_html=True)
 
             with st.form("registro_operativo"):
-                busqueda_prod = st.text_input("Busca un producto...", placeholder="Escribe el nombre o código para filtrar")
-                
-                if "Nombre Producto" in df_inv.columns:
-                    lista_prods = df_inv["Nombre Producto"].dropna().tolist()
-                elif len(df_inv.columns) > 2:
-                    lista_prods = df_inv.iloc[:, 2].dropna().tolist()
-                else:
-                    lista_prods = []
+                busqueda_prod = st.text_input(
+                    "Busca un producto...",
+                    placeholder="Escribe el nombre o código para filtrar"
+                )
 
-                # Filtrar por nombre O código
+                # ✅ Filtrado vectorizado: una sola pasada sobre el df completo
                 if busqueda_prod:
-                    prods_filtrados = []
-                    for prod_nombre in lista_prods:
-                        fila_prod = df_inv[df_inv["Nombre Producto"] == prod_nombre].iloc[0]
-                        codigo = str(fila_prod["Código Producto"] if "Código Producto" in fila_prod.index else fila_prod.iloc[1])
-                        
-                        # Si coincide con nombre O código, agregar
-                        if busqueda_prod.lower() in prod_nombre.lower() or busqueda_prod.lower() in codigo.lower():
-                            prods_filtrados.append(prod_nombre)
+                    mascara = (
+                        df_inv[COL_NOMBRE].str.contains(busqueda_prod, case=False, na=False) |
+                        df_inv[COL_CODIGO].astype(str).str.contains(busqueda_prod, case=False, na=False)
+                    )
+                    prods_filtrados = df_inv[mascara][COL_NOMBRE].dropna().tolist()
                 else:
-                    prods_filtrados = lista_prods
+                    prods_filtrados = df_inv[COL_NOMBRE].dropna().tolist()
 
                 prod_sel = st.selectbox(
                     "Producto",
@@ -300,40 +297,40 @@ with tab_form:
 
                 cant = st.number_input("Cantidad a pedir", min_value=1, step=1, value=1)
 
-                btn_col1, btn_col2 = st.columns([2, 1])
+                btn_col1, _ = st.columns([2, 1])
                 with btn_col1:
                     btn_agregar = st.form_submit_button("➕ Añadir al Carrito", use_container_width=True)
 
                 if btn_agregar:
                     if prod_sel:
-                        if "Nombre Producto" in df_inv.columns:
-                            fila_p = df_inv[df_inv["Nombre Producto"] == prod_sel].iloc[0]
-                        else:
-                            fila_p = df_inv[df_inv.iloc[:, 2] == prod_sel].iloc[0]
-                        
-                        stock_col = "Stock" if "Stock" in df_inv.columns else df_inv.columns[3]
-                        stock_actual = fila_p[stock_col]
-                        
-                        cant_en_carrito = sum(item['cantidad'] for item in st.session_state.carrito if item['producto'] == prod_sel)
-                        
-                        if validar_stock(cant + cant_en_carrito, stock_actual):
-                            st.session_state.carrito.append({
-                                "producto": prod_sel,
-                                "cantidad": int(cant),
-                                "fila_data": fila_p,
-                                "subtotal": float(fila_p.iloc[4]) * int(cant) if len(fila_p) > 4 else 0
-                            })
-                            st.toast(f"✅ Agregado: {prod_sel}")
-                            st.rerun()
-                        else:
-                            st.error(f"❌ Stock insuficiente. Solo quedan **{int(stock_actual)}** unidades.")
+                        # ✅ Acceso O(1) por índice en lugar de filtrar el df
+                        fila_p = indice_productos.get(prod_sel)
+                        if fila_p is not None:
+                            stock_actual     = fila_p[COL_STOCK]
+                            cant_en_carrito  = sum(
+                                i['cantidad'] for i in st.session_state.carrito
+                                if i['producto'] == prod_sel
+                            )
+
+                            if validar_stock(cant + cant_en_carrito, stock_actual):
+                                precio_unit = float(fila_p[COL_PRECIO]) if pd.notna(fila_p[COL_PRECIO]) else 0
+                                st.session_state.carrito.append({
+                                    "producto":  prod_sel,
+                                    "cantidad":  int(cant),
+                                    "fila_data": fila_p,
+                                    "subtotal":  precio_unit * int(cant)
+                                })
+                                st.toast(f"✅ Agregado: {prod_sel}")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Stock insuficiente. Solo quedan **{int(stock_actual)}** unidades.")
                     else:
                         st.warning("⚠️ Selecciona un producto.")
 
-            # ── VISUALIZACIÓN DEL CARRITO ───────────────────────────────────
+            # ── VISUALIZACIÓN DEL CARRITO ────────────────────────────────────
             if st.session_state.carrito:
                 st.markdown('<div class="section-title">Tu Pedido Actual</div>', unsafe_allow_html=True)
-                
+
                 for i, item in enumerate(st.session_state.carrito):
                     with st.container():
                         c_prod, c_cant, c_price, c_del = st.columns([3, 1, 1.5, 0.5])
@@ -348,119 +345,131 @@ with tab_form:
                 monto_total_carrito = sum(item['subtotal'] for item in st.session_state.carrito)
                 st.markdown(f"### Total Pedido: Bs {monto_total_carrito:,.2f}")
 
-                # BOTÓN FINALIZAR PEDIDO
+                # ── BOTÓN ENVIAR PEDIDO ──────────────────────────────────────
                 if st.button("✅  CONFIRMAR Y ENVIAR TODO EL PEDIDO", type="primary", use_container_width=True):
                     try:
                         if USING_SHEETS:
+                            # Preparar items
                             items_para_sheets = []
                             for item in st.session_state.carrito:
                                 fila = item['fila_data']
-                                codigo_prod = str(fila["Código Producto"] if "Código Producto" in fila.index else fila.iloc[1])
-                                precio_unit = float(fila["Precio Unitario"] if "Precio Unitario" in fila.index else fila.iloc[4])
-                                linea = str(fila["Línea"] if "Línea" in fila.index else fila.iloc[0])
-                                empresa = st.session_state.empresa_validada or str(fila.get("Empresa", fila.iloc[5]) if "Empresa" in fila.index else fila.iloc[5])
-                                stock = int(fila["Stock"] if "Stock" in fila.index else fila.iloc[3])
-                                
                                 items_para_sheets.append({
-                                    "codigo_producto": codigo_prod,
-                                    "producto": item['producto'],
-                                    "cantidad": item['cantidad'],
-                                    "precio_unitario": precio_unit,
-                                    "linea": linea,
-                                    "descuento": 0,
-                                    "stock_actual": stock,
-                                    "empresa": empresa
+                                    "codigo_producto": str(fila[COL_CODIGO]),
+                                    "producto":        item['producto'],
+                                    "cantidad":        item['cantidad'],
+                                    "precio_unitario": float(fila[COL_PRECIO]),
+                                    "linea":           str(fila[COL_LINEA]),
+                                    "descuento":       0,
+                                    "stock_actual":    int(fila[COL_STOCK]),
+                                    "empresa":         st.session_state.empresa_validada or str(fila[COL_EMPRESA])
                                 })
-                            
-                            if guardar_pedido_sheets(st.session_state.cod_emp_validado, st.session_state.nom_emp_validado, items_para_sheets, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME):
-                                
-                                for item in items_para_sheets:
-                                    actualizar_stock_sheets(
-                                        codigo_producto=item['codigo_producto'],
-                                        cantidad_a_restar=item['cantidad'],
+
+                            # ✅ Feedback visual mientras se procesa
+                            with st.status("Procesando pedido...", expanded=True) as status:
+                                st.write("📝 Guardando en el registro...")
+                                guardado = guardar_pedido_sheets(
+                                    st.session_state.cod_emp_validado,
+                                    st.session_state.nom_emp_validado,
+                                    items_para_sheets,
+                                    PEDIDOS_SHEET_URL,
+                                    PEDIDOS_HOJA_NAME
+                                )
+
+                                if guardado:
+                                    st.write("📦 Actualizando stock...")
+                                    # ✅ UNA sola llamada HTTP en vez de N secuenciales
+                                    actualizar_stock_batch_sheets(
+                                        items=[{
+                                            "codigo_producto":  i["codigo_producto"],
+                                            "cantidad_a_restar": i["cantidad"]
+                                        } for i in items_para_sheets],
                                         url_sheet=INVENTARIO_SHEET_URL,
                                         hoja=INVENTARIO_HOJA_NAME
                                     )
-                                
-                                st.session_state.carrito = []
-                                st.cache_data.clear()
-                                st.success("✅ Pedido guardado y stock actualizado en la nube.")
-                                st.rerun()
-                            else:
-                                st.error("❌ Error al guardar pedido en Google Sheets")
+
+                                    st.session_state.carrito = []
+                                    st.cache_data.clear()
+                                    status.update(label="✅ ¡Pedido enviado y stock actualizado!", state="complete")
+                                    st.rerun()
+                                else:
+                                    status.update(label="❌ Error al guardar el pedido.", state="error")
+                                    st.error("❌ Error al guardar pedido en Google Sheets")
+
                         else:
-                            for item in st.session_state.carrito:
-                                nueva_fila = preparar_fila_pedido(st.session_state.cod_emp_validado, st.session_state.nom_emp_validado, item['fila_data'], item['cantidad'])
-                                guardar_pedido(nueva_fila)
-                                actualizar_stock_inventario(item['fila_data'].iloc[1], item['cantidad'])
-                            
-                            st.session_state.carrito = []
-                            st.success(f"✅ Pedido guardado para: {st.session_state.nom_emp_validado}")
-                            st.rerun()
+                            # Modo local (sin Sheets)
+                            with st.status("Guardando pedido...", expanded=True) as status:
+                                st.write("📝 Escribiendo en archivo local...")
+                                for item in st.session_state.carrito:
+                                    nueva_fila = preparar_fila_pedido(
+                                        st.session_state.cod_emp_validado,
+                                        st.session_state.nom_emp_validado,
+                                        item['fila_data'],
+                                        item['cantidad']
+                                    )
+                                    guardar_pedido(nueva_fila)
+                                    actualizar_stock_inventario(item['fila_data'].iloc[1], item['cantidad'])
+
+                                st.session_state.carrito = []
+                                status.update(label=f"✅ Pedido guardado para: {st.session_state.nom_emp_validado}", state="complete")
+                                st.rerun()
+
                     except Exception as e:
                         st.error(f"❌ Error en el proceso: {str(e)}")
 
         else:
             st.info("👆 Valida un empleado para comenzar a registrar pedidos.")
 
-    # ── Panel lateral informativo ──────────────────────────────────────────
+    # ── PANEL LATERAL: VISTA PREVIA DEL PRODUCTO ────────────────────────────
     with col_info:
         st.markdown('<div class="section-title">Vista Previa del Producto</div>', unsafe_allow_html=True)
 
         if st.session_state.emp_validado and 'prod_sel' in locals() and prod_sel:
-            if "Nombre Producto" in df_inv.columns:
-                fila_preview = df_inv[df_inv["Nombre Producto"] == prod_sel].iloc[0]
-            else:
-                fila_preview = df_inv[df_inv.iloc[:, 2] == prod_sel].iloc[0]
-            
-            stock_col = "Stock" if "Stock" in df_inv.columns else df_inv.columns[3]
-            precio_col = "Precio Unitario" if "Precio Unitario" in df_inv.columns else df_inv.columns[4]
-            codigo_col = "Código Producto" if "Código Producto" in df_inv.columns else df_inv.columns[1]
-            linea_col = "Línea" if "Línea" in df_inv.columns else df_inv.columns[0]
-            empresa_col = "Empresa" if "Empresa" in df_inv.columns else df_inv.columns[5]
-            
-            stock_prev = int(fila_preview[stock_col])
-            precio_prev = float(fila_preview[precio_col])
-            codigo_prev = fila_preview[codigo_col]
-            linea_prev = fila_preview[linea_col]
-            empresa_prev = fila_preview[empresa_col]
+            # ✅ Acceso O(1) por índice
+            fila_preview = indice_productos.get(prod_sel)
 
-            if stock_prev <= 0:
-                stock_badge = f'<span class="stock-out">⛔ Agotado</span>'
-            elif stock_prev <= 5:
-                stock_badge = f'<span class="stock-warn">⚠️ Stock bajo: {stock_prev} ud.</span>'
-            else:
-                stock_badge = f'<span class="stock-ok">✅ En stock: {stock_prev} ud.</span>'
+            if fila_preview is not None:
+                stock_prev  = int(fila_preview[COL_STOCK])
+                precio_prev = float(fila_preview[COL_PRECIO])
+                codigo_prev = fila_preview[COL_CODIGO]
+                linea_prev  = fila_preview[COL_LINEA]
+                empresa_prev= fila_preview[COL_EMPRESA]
 
-            st.markdown(f"""
-            <div class="prod-info-box">
-                <div class="label">Código</div>
-                <div class="value">{codigo_prev}</div>
-            </div>
-            <div class="prod-info-box">
-                <div class="label">Línea</div>
-                <div class="value" style="font-size:0.95rem">{linea_prev}</div>
-            </div>
-            <div class="prod-info-box">
-                <div class="label">Empresa</div>
-                <div class="value" style="font-size:0.95rem">{empresa_prev}</div>
-            </div>
-            <div class="prod-info-box">
-                <div class="label">Precio Unitario</div>
-                <div class="value">Bs {precio_prev:,.2f}</div>
-            </div>
-            <div style="margin-top:0.75rem">{stock_badge}</div>
-            """, unsafe_allow_html=True)
+                if stock_prev <= 0:
+                    stock_badge = '<span class="stock-out">⛔ Agotado</span>'
+                elif stock_prev <= 5:
+                    stock_badge = f'<span class="stock-warn">⚠️ Stock bajo: {stock_prev} ud.</span>'
+                else:
+                    stock_badge = f'<span class="stock-ok">✅ En stock: {stock_prev} ud.</span>'
 
-            if cant and cant > 0:
-                total_est = cant * precio_prev
                 st.markdown(f"""
-                <div style="background:#1A1A2E;color:white;border-radius:10px;padding:1rem 1.25rem;margin-top:0.75rem">
-                    <div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:1px;color:#A8B2C8;margin-bottom:0.3rem">Total estimado</div>
-                    <div style="font-size:1.6rem;font-weight:700;font-family:'DM Mono',monospace">Bs {total_est:,.2f}</div>
-                    <div style="font-size:0.78rem;color:#A8B2C8;margin-top:0.2rem">{int(cant)} ud. × Bs {precio_prev:,.2f}</div>
+                <div class="prod-info-box">
+                    <div class="label">Código</div>
+                    <div class="value">{codigo_prev}</div>
                 </div>
+                <div class="prod-info-box">
+                    <div class="label">Línea</div>
+                    <div class="value" style="font-size:0.95rem">{linea_prev}</div>
+                </div>
+                <div class="prod-info-box">
+                    <div class="label">Empresa</div>
+                    <div class="value" style="font-size:0.95rem">{empresa_prev}</div>
+                </div>
+                <div class="prod-info-box">
+                    <div class="label">Precio Unitario</div>
+                    <div class="value">Bs {precio_prev:,.2f}</div>
+                </div>
+                <div style="margin-top:0.75rem">{stock_badge}</div>
                 """, unsafe_allow_html=True)
+
+                if 'cant' in locals() and cant and cant > 0:
+                    total_est = cant * precio_prev
+                    st.markdown(f"""
+                    <div style="background:#1A1A2E;color:white;border-radius:10px;padding:1rem 1.25rem;margin-top:0.75rem">
+                        <div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:1px;color:#A8B2C8;margin-bottom:0.3rem">Total estimado</div>
+                        <div style="font-size:1.6rem;font-weight:700;font-family:'DM Mono',monospace">Bs {total_est:,.2f}</div>
+                        <div style="font-size:0.78rem;color:#A8B2C8;margin-top:0.2rem">{int(cant)} ud. × Bs {precio_prev:,.2f}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
         else:
             st.markdown("""
             <div style="background:#F9F9F9;border:2px dashed #DDD;border-radius:12px;padding:2rem;text-align:center;color:#BBB;">
@@ -469,12 +478,16 @@ with tab_form:
             </div>
             """, unsafe_allow_html=True)
 
+
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 2 — HISTORIAL
 # ════════════════════════════════════════════════════════════════════════════
 with tab_historial:
     if USING_SHEETS:
-        df_p = obtener_todos_pedidos_sheets(PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME)
+        @st.cache_data(ttl=120, show_spinner=False)
+        def _cargar_historial_completo():
+            return obtener_todos_pedidos_sheets(PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME)
+        df_p = _cargar_historial_completo()
     else:
         if os.path.exists("data/consolidado_pedidos.xlsx"):
             df_p = pd.read_excel("data/consolidado_pedidos.xlsx")
@@ -482,9 +495,9 @@ with tab_historial:
             df_p = pd.DataFrame()
 
     if not df_p.empty:
-        total_pedidos = len(df_p)
+        total_pedidos  = len(df_p)
         total_unidades = int(df_p["Cantidad"].sum()) if "Cantidad" in df_p.columns else 0
-        
+
         st.markdown(f"""
         <div style="margin:1rem 0 1.25rem">
             <div class="stat-pill">📋 {total_pedidos} <span>pedidos</span></div>
@@ -502,8 +515,7 @@ with tab_historial:
                 file_name=f"Pedidos_{datetime.now().strftime('%d_%m_%Y')}.csv",
                 mime="text/csv"
             )
-        except:
+        except Exception:
             pass
-
     else:
         st.info("No hay pedidos registrados en el historial.")
