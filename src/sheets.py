@@ -5,7 +5,7 @@ import pytz
 
 try:
     import gspread
-    from gspread.utils import rowcol_to_a1
+    from gspread import Cell
     from oauth2client.service_account import ServiceAccountCredentials
     HAS_GSPREAD = True
 except ImportError:
@@ -155,8 +155,9 @@ def actualizar_stock_sheets(
     hoja: str = "Inventario"
 ):
     """
-    Actualiza el stock de UN producto (se mantiene por compatibilidad).
-    Para múltiples productos usa actualizar_stock_batch_sheets().
+    Actualiza el stock de UN producto.
+    Se mantiene por compatibilidad — para múltiples productos
+    usa actualizar_stock_batch_sheets() que es mucho más rápido.
     """
     try:
         gc = get_gsheet_connection()
@@ -190,26 +191,22 @@ def actualizar_stock_batch_sheets(
     hoja: str = "Inventario"
 ) -> bool:
     """
-    Actualiza el stock de MÚLTIPLES productos en una sola llamada HTTP.
+    Actualiza el stock de MÚLTIPLES productos en solo 2 llamadas HTTP.
+
+    La función original (actualizar_stock_sheets en loop) hace
+    3 llamadas por producto: col_values + cell + update_cell.
+    Esta función siempre hace exactamente 2 sin importar cuántos productos:
+        get_all_values()  →  1 lectura
+        update_cells()    →  1 escritura batch
 
     Parámetros
     ----------
     items : list[dict]
-        Lista de dicts con keys:
-            - "codigo_producto"  (str)
-            - "cantidad_a_restar" (int)
+        [{"codigo_producto": "ABC123", "cantidad_a_restar": 2}, ...]
     url_sheet : str
-        URL de la Google Sheet.
+        URL de la Google Sheet de inventario.
     hoja : str
-        Nombre de la hoja de inventario.
-
-    Por qué es más rápido
-    ---------------------
-    La función original hace 3 llamadas HTTP por producto:
-        col_values() + cell() + update_cell() × N productos
-
-    Esta función hace 2 llamadas HTTP en total sin importar cuántos productos:
-        get_all_values() × 1  +  batch_update() × 1
+        Nombre de la hoja (default "Inventario").
     """
     try:
         gc = get_gsheet_connection()
@@ -219,41 +216,48 @@ def actualizar_stock_batch_sheets(
         spreadsheet = gc.open_by_url(url_sheet)
         worksheet = spreadsheet.worksheet(hoja)
 
-        # 1 sola lectura: traer toda la hoja de una vez
+        # ── Lectura única de toda la hoja ────────────────────────────────────
+        # get_all_values() devuelve lista de listas (incluye el header en [0])
+        # Columna B = índice 1 → Código Producto
+        # Columna D = índice 3 → Stock
+        # En gspread Cell(row, col) ambos son 1-based, por eso col = índice+1
+        COL_CODIGO_IDX = 1   # índice 0-based en la lista de la fila
+        COL_STOCK_IDX  = 3   # índice 0-based en la lista de la fila
+        COL_STOCK_NUM  = 4   # número de columna 1-based para gspread Cell
+
         data = worksheet.get_all_values()
-        if not data:
+        if not data or len(data) < 2:
             return False
 
-        # La columna B (índice 1) es Código Producto
-        # La columna D (índice 3) es Stock
-        COL_CODIGO = 1
-        COL_STOCK  = 3
-
-        # Construir mapa codigo → (row_idx, stock_actual) para acceso O(1)
+        # Construir mapa código → (fila 1-based, stock actual)
         mapa = {}
-        for row_idx, row in enumerate(data[1:], start=2):  # start=2 por el header
-            if len(row) > COL_CODIGO:
-                codigo = str(row[COL_CODIGO]).strip()
-                stock  = int(float(row[COL_STOCK])) if len(row) > COL_STOCK and row[COL_STOCK] else 0
-                mapa[codigo] = {"row_idx": row_idx, "stock_actual": stock}
+        for i, row in enumerate(data[1:], start=2):  # start=2: fila 1 es el header
+            if len(row) > COL_CODIGO_IDX:
+                codigo = str(row[COL_CODIGO_IDX]).strip()
+                try:
+                    stock = int(float(row[COL_STOCK_IDX])) if len(row) > COL_STOCK_IDX and row[COL_STOCK_IDX] else 0
+                except (ValueError, TypeError):
+                    stock = 0
+                mapa[codigo] = {"fila": i, "stock": stock}
 
-        # Preparar todas las actualizaciones en memoria
-        updates = []
+        # ── Preparar objetos Cell con el stock nuevo ─────────────────────────
+        celdas_a_actualizar = []
         for item in items:
             codigo = str(item["codigo_producto"]).strip()
             restar = int(item["cantidad_a_restar"])
 
             if codigo not in mapa:
-                st.warning(f"⚠️ Código {codigo} no encontrado en inventario.")
+                st.warning(f"⚠️ Código '{codigo}' no encontrado en inventario.")
                 continue
 
-            nuevo_stock = max(0, mapa[codigo]["stock_actual"] - restar)
-            celda = rowcol_to_a1(mapa[codigo]["row_idx"], COL_STOCK + 1)  # +1: gspread es 1-based
-            updates.append({"range": celda, "values": [[nuevo_stock]]})
+            nuevo_stock = max(0, mapa[codigo]["stock"] - restar)
+            celdas_a_actualizar.append(
+                Cell(row=mapa[codigo]["fila"], col=COL_STOCK_NUM, value=nuevo_stock)
+            )
 
-        # 1 sola escritura: mandar todos los cambios juntos
-        if updates:
-            worksheet.batch_update(updates)
+        # ── Escritura única con todas las celdas juntas ──────────────────────
+        if celdas_a_actualizar:
+            worksheet.update_cells(celdas_a_actualizar)
 
         return True
 
