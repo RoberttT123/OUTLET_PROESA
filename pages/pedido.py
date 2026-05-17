@@ -313,18 +313,36 @@ else:
 
             if st.session_state.carrito:
                 for i, item in enumerate(st.session_state.carrito):
-                    col_info, col_del = st.columns([4, 1])
+                    fila_item  = indice_productos.get(item['producto'])
+                    stock_max  = int(fila_item[col_stock]) if fila_item is not None else 99
 
-                    with col_info:
-                        st.markdown(
-                            f"**{item['producto']}**\n\n"
-                            f"{item['cantidad']} × Bs {item['precio_unitario']:,.2f}\n\n"
-                            f"**Bs {item['subtotal']:,.2f}**"
+                    col_nombre, col_cant, col_precio, col_del = st.columns([2.5, 1.2, 1.2, 0.5])
+
+                    with col_nombre:
+                        st.markdown(f"**{item['producto']}**\n`Bs {item['precio_unitario']:,.2f} c/u`")
+
+                    with col_cant:
+                        nueva_cant = st.number_input(
+                            "Cantidad",
+                            min_value=1,
+                            max_value=stock_max,
+                            value=item['cantidad'],
+                            step=1,
+                            key=f"edit_cant_{i}",
+                            label_visibility="collapsed"
                         )
+                        if nueva_cant != item['cantidad']:
+                            st.session_state.carrito[i]['cantidad'] = nueva_cant
+                            st.session_state.carrito[i]['subtotal'] = nueva_cant * item['precio_unitario']
+                            st.rerun(scope="fragment")
+
+                    with col_precio:
+                        st.markdown(f"**Bs {item['subtotal']:,.2f}**")
+
                     with col_del:
                         if st.button("❌", key=f"del_{i}"):
                             st.session_state.carrito.pop(i)
-                            st.rerun(scope="fragment")  # ✅ Solo el fragment
+                            st.rerun(scope="fragment")
 
                 total = sum(item['subtotal'] for item in st.session_state.carrito)
                 st.markdown(f"""

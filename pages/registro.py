@@ -46,7 +46,7 @@ for key, val in defaults.items():
 # ── ESTILOS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 
@@ -333,10 +333,31 @@ with tab_form:
 
                 for i, item in enumerate(st.session_state.carrito):
                     with st.container():
-                        c_prod, c_cant, c_price, c_del = st.columns([3, 1, 1.5, 0.5])
-                        c_prod.write(f"**{item['producto']}**")
-                        c_cant.write(f"{item['cantidad']} ud.")
-                        c_price.write(f"Bs {item['subtotal']:,.2f}")
+                        fila_item = indice_productos.get(item['producto'])
+                        stock_max = int(fila_item[COL_STOCK]) if fila_item is not None else 99
+                        precio_unit = item['subtotal'] / item['cantidad'] if item['cantidad'] else 0
+
+                        c_prod, c_cant, c_price, c_del = st.columns([2.5, 1.2, 1.5, 0.5])
+
+                        c_prod.markdown(f"**{item['producto']}**\n`Bs {precio_unit:,.2f} c/u`")
+
+                        with c_cant:
+                            nueva_cant = st.number_input(
+                                "Cantidad",
+                                min_value=1,
+                                max_value=stock_max,
+                                value=item['cantidad'],
+                                step=1,
+                                key=f"edit_cant_{i}",
+                                label_visibility="collapsed"
+                            )
+                            if nueva_cant != item['cantidad']:
+                                st.session_state.carrito[i]['cantidad'] = nueva_cant
+                                st.session_state.carrito[i]['subtotal'] = nueva_cant * precio_unit
+                                st.rerun()
+
+                        c_price.markdown(f"**Bs {item['subtotal']:,.2f}**")
+
                         if c_del.button("❌", key=f"del_{i}", use_container_width=True):
                             st.session_state.carrito.pop(i)
                             st.rerun()
