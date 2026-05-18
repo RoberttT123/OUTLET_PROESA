@@ -1,444 +1,576 @@
+# -*- coding: utf-8 -*-
+"""
+SISTEMA DE CONTROL DE PEDIDOS - OUTLET PROESA
+----------------------------------------------------------------
+Archivo Principal de la Aplicación: pedido.py
+Lógica de Negocio, Gestión de Estado Multitendencia y Fragmentación de UI.
+
+Arquitectura: Model-View-Controller adaptado para Streamlit.
+Enfoque de Renderizado: Mobile-First mediante Pestañas (Tabs) e interfaces Grid.
+Última Revisión Corporativa: Mayo 2026
+"""
+
 import streamlit as st
 import pandas as pd
 import base64
+import sys
 from datetime import datetime
 
-# Importar configuración
+# ==============================================================================
+# 1. VALIDACIÓN EN CASCADA Y CARGA DE CONFIGURACIÓN CORPORATIVA
+# ==============================================================================
 try:
-    from config import INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME
+    from config import (
+        INVENTARIO_SHEET_URL, 
+        INVENTARIO_HOJA_NAME, 
+        PEDIDOS_SHEET_URL, 
+        PEDIDOS_HOJA_NAME
+    )
     CONFIG_LOADED = True
-except ImportError:
+except ImportError as imp_err:
     CONFIG_LOADED = False
-    st.error("❌ Archivo `config.py` no encontrado.")
+    st.error(f"❌ Error Crítico de Infraestructura: Archivo `config.py` no fue localizado en la raíz.")
+    st.info("Por favor, asegúrese de que el archivo de configuración exista and contenga las credenciales de Google Sheets.")
+    st.stop()
+except Exception as ex_cfg:
+    CONFIG_LOADED = False
+    st.error(f"❌ Error inesperado al leer `config.py`: {str(ex_cfg)}")
     st.stop()
 
-from src.sheets import (
-    obtener_inventario_sheets,
-    obtener_pedidos_empleado_sheets,
-    guardar_pedido_sheets,
-    actualizar_stock_batch_sheets,   # ← función batch nueva (ver sheets_additions.py)
-)
-from src.database import obtener_datos_empleado, validar_empleado
+# ==============================================================================
+# 2. IMPORTACIÓN DE SERVICIOS API Y ADAPTADORES DE DATOS
+# ==============================================================================
+try:
+    from src.sheets import (
+        obtener_inventario_sheets,
+        obtener_pedidos_empleado_sheets,
+        guardar_pedido_sheets,
+        actualizar_stock_batch_sheets,
+    )
+    from src.database import obtener_datos_empleado, validar_empleado
+    from src.componentes import cargar_estilos_css, render_tarjeta_producto
+except ImportError as imp_src:
+    st.error(f"❌ Error de Dependencias Internas: No se pudieron cargar los módulos del directorio `src/`.")
+    st.code(str(imp_src))
+    st.stop()
 
-st.set_page_config(
-    page_title="Mi Pedido - Outlet PROESA",
-    layout="wide",
-    page_icon="🛒",
-    initial_sidebar_state="collapsed"
-)
+# ==============================================================================
+# 3. CONFIGURACIÓN E INICIALIZACIÓN DEL ENTORNO WEB
+# ==============================================================================
+try:
+    st.set_page_config(
+        page_title="Mi Pedido - Outlet PROESA",
+        layout="wide",
+        page_icon="🛒",
+        initial_sidebar_state="collapsed"
+    )
+except Exception:
+    # Captura fallos si st.set_page_config no es la primera llamada nativa
+    pass
 
-# ── ESTILOS ────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@500&display=swap');
+# Inyección de la hoja de estilos CSS unificada desde el módulo de componentes
+try:
+    cargar_estilos_css()
+except Exception as ex_css:
+    st.warning(f"⚠️ No se pudieron aplicar los estilos personalizados: {str(ex_css)}")
 
-html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
-.stApp { background: #F5F4F0; }
-.block-container {
-    padding-top: 0.2rem !important;
-    padding-bottom: 0rem !important;
-}
-.hero-login {
-    background: linear-gradient(135deg, #1A1A2E 0%, #0F3460 100%);
-    border-radius: 20px;
-    padding: 2.5rem 2.5rem;
-    margin-bottom: 2rem;
-    text-align: center;
-    color: white;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 140px;
-}
-.hero-login h1 {
-    font-size: 2.2rem;
-    font-weight: 700;
-    margin: 0 0 0.5rem;
-}
-
-.login-form {
-    background: white;
-    border-radius: 16px;
-    padding: 2rem;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-    max-width: 400px;
-    margin: 0 auto;
-}
-
-.page-header {
-    background: white;
-    border-radius: 16px;
-    padding: 1.5rem 2rem;
-    margin-bottom: 1.5rem;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    border-top: 4px solid #E63946;
-}
-.page-header h2 { color: #1A1A2E; font-size: 1.5rem; margin: 0; }
-.page-header p { color: #888; margin: 0.2rem 0 0; }
-
-.section-title {
-    font-size: 0.78rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: #AAA;
-    margin: 1.5rem 0 0.5rem;
-    padding-bottom: 0.4rem;
-    border-bottom: 2px solid #EBEBEB;
-}
-
-.carrito-total {
-    background: #1A1A2E;
-    color: white;
-    border-radius: 12px;
-    padding: 1.5rem;
-    margin: 1.5rem 0;
-    text-align: center;
-}
-
-.stock-ok { background: #D1FAE5; color: #065F46; border-radius: 20px; padding: 3px 12px; font-size: 0.75rem; font-weight: 600; }
-.stock-warn { background: #FEF9C3; color: #854D0E; border-radius: 20px; padding: 3px 12px; font-size: 0.75rem; }
-.stock-out { background: #FEE2E2; color: #991B1B; border-radius: 20px; padding: 3px 12px; font-size: 0.75rem; }
-
-.emp-info {
-    background: #F0F7FF;
-    border: 1px solid #BFDBFE;
-    border-radius: 10px;
-    padding: 1rem;
-    margin: 1rem 0;
-    font-size: 0.9rem;
-}
-
-#MainMenu, header, footer { visibility: hidden; }
-.stAppViewContainer footer { display: none !important; }
-footer { display: none !important; }
-[data-testid="stDecoration"] { display: none !important; }
-.reportview-container footer { display: none !important; }
-[data-testid="stToolbar"] { display: none !important; }
-.stDeployButton { display: none !important; }
-div[data-testid="stAppViewContainer"] > footer { display: none !important; }
-</style>
-""", unsafe_allow_html=True)
-
-# ── LOGO ────────────────────────────────────────────────────────────────────
+# ==============================================================================
+# 4. GESTIÓN DE RECURSOS ESTÁTICOS (LOGO EMBEDDED)
+# ==============================================================================
 @st.cache_data(show_spinner=False)
-def get_logo_b64(path="assets/logo_proesa.png"):
-    """Carga el logo una sola vez y lo cachea para no releerlo en cada rerun."""
+def get_logo_b64(path: str = "assets/logo_proesa.png") -> str:
+    """
+    Lee una imagen local en binario y la convierte a una cadena Base64.
+    Previene re-lecturas de disco redundantes optimizando la velocidad de rerun.
+    """
     try:
-        with open(path, "rb") as f:
-            return base64.b64encode(f.read()).decode()
-    except:
+        with open(path, "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read()).decode()
+            return encoded_string
+    except FileNotFoundError:
+        return None
+    except Exception:
         return None
 
-# ── SESSION STATE ───────────────────────────────────────────────────────────
-defaults = {
+# ==============================================================================
+# 5. CONTROL DE CICLO DE VIDA Y ESTADO INTERNO (SESSION STATE)
+# ==============================================================================
+# Se definen las variables necesarias para mantener el estado a lo largo de la sesión.
+estructura_estado_por_defecto = {
     'logged_in': False,
     'cod_emp': None,
     'nom_emp': None,
     'empresa': None,
     'regional': None,
     'carrito': [],
+    'ultimo_rerun': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 }
-for key, val in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
 
-# ── CARGAR INVENTARIO (cacheado 5 min) ──────────────────────────────────────
+for propiedad, valor_inicial in estructura_estado_por_defecto.items():
+    if propiedad not in st.session_state:
+        st.session_state[propiedad] = valor_inicial
+
+# ==============================================================================
+# 6. CAPA DE ABASTECIMIENTO DE DATOS E INDEXACIÓN OPTIMIZADA
+# ==============================================================================
 @st.cache_data(ttl=300, show_spinner=False)
-def cargar_inventario():
-    return obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
+def ejecutar_carga_inventario_segura() -> pd.DataFrame:
+    """
+    Extrae los registros actualizados de la base de datos en Sheets.
+    Implementa un Time-To-Live (TTL) de 5 minutos para balancear frescura de stock
+    y consumo de cuotas de la API de Google.
+    """
+    try:
+        dataframe_resultado = obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
+        if dataframe_resultado is None or dataframe_resultado.empty:
+            return pd.DataFrame()
+        return dataframe_resultado
+    except Exception as ex_sheets:
+        st.error(f"Falló la conexión con la base de datos de inventario: {str(ex_sheets)}")
+        return pd.DataFrame()
 
-df_inv = cargar_inventario()
+# Orquestación de carga
+df_inv = ejecutar_carga_inventario_segura()
 
 if df_inv.empty:
-    st.error("❌ No se pudo cargar el catálogo.")
+    st.error("❌ Catálogo no disponible: La base de datos retornó un conjunto vacío o inaccesible.")
+    st.info("Verifique su conexión a internet o los permisos de la URL en config.py.")
     st.stop()
 
-# ── PRE-PROCESAR INVENTARIO UNA SOLA VEZ ────────────────────────────────────
-# Construir índice nombre→fila para búsquedas O(1) en lugar de filtrar el df
-# cada vez que se muestra un producto.
 @st.cache_data(show_spinner=False)
-def construir_indice(df_hash):
-    """Devuelve dict {nombre: fila_dict} para acceso instantáneo."""
-    df = df_inv.copy()
-    col_nombre = "Nombre Producto" if "Nombre Producto" in df.columns else df.columns[2]
-    col_codigo = "Código Producto" if "Código Producto" in df.columns else df.columns[1]
-    indice = {}
-    for _, row in df.iterrows():
-        nombre = row[col_nombre]
-        if pd.notna(nombre):
-            indice[nombre] = row
-    return indice
+def construir_indice_maestro_productos(dimension_dataframe_hash: str) -> dict:
+    """
+    Genera una tabla Hash en memoria {Nombre_Producto -> Fila_Atributos}.
+    Permite búsquedas y validaciones O(1) cuando el usuario manipula cantidades
+    dentro del carrito de compras, anulanado búsquedas secuenciales en DataFrames.
+    """
+    try:
+        dataframe_trabajo = df_inv.copy()
+        
+        # Mapeo dinámico de nombres de columnas para mitigar variaciones del archivo origen
+        col_clave_nombre = "Nombre Producto" if "Nombre Producto" in dataframe_trabajo.columns else dataframe_trabajo.columns[2]
+        
+        indice_construido = {}
+        for idx, fila in dataframe_trabajo.iterrows():
+            nombre_llave = fila[col_clave_nombre]
+            if pd.notna(nombre_llave):
+                # Guardamos la serie de la fila mapeada con el nombre del producto como clave
+                indice_construido[str(nombre_llave).strip()] = fila
+                
+        return indice_construido
+    except Exception as ex_index:
+        st.error(f"Fallo crítico al indexar catálogo: {str(ex_index)}")
+        return {}
 
-# Usamos el shape como proxy de hash para el cache
-indice_productos = construir_indice(str(df_inv.shape))
+# El shape del dataframe actúa como trigger de actualización del caché del índice
+indice_productos = construir_indice_maestro_productos(str(df_inv.shape))
 
 
+# ==============================================================================
 # ═════════════════════════════════════════════════════════════════════════════
-# PANTALLA 1: LOGIN
+# PANTALLA 1: ARQUITECTURA DE AUTENTICACIÓN Y CONTROL DE ACCESO
 # ═════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 if not st.session_state.logged_in:
-    logo_b64 = get_logo_b64()
+    logo_codificado = get_logo_b64()
 
+    # Renderizado del bloque estructural Hero con diseño adaptativo inline
     st.markdown(f"""
     <div class="hero-login">
-        {f'<img src="data:image/png;base64,{logo_b64}" style="height:210px;width:auto;object-fit:contain;margin-top:-20px;margin-bottom:0px;">' if logo_b64 else ''}
-        <h1 style="margin-top:0;">Outlet PROESA</h1>
-        <p style="margin-bottom:0;">Sistema de Pedidos para Empleados</p>
+        {f'<img src="data:image/png;base64,{logo_codificado}" style="height:210px;width:auto;object-fit:contain;margin-top:-20px;margin-bottom:0px;">' if logo_codificado else ''}
+        <h1 style="margin-top:0; font-family:\'DM Sans\', sans-serif;">Outlet PROESA</h1>
+        <p style="margin-bottom:0; font-family:\'DM Sans\', sans-serif;">Sistema de Pedidos Internos para Empleados</p>
     </div>
     """, unsafe_allow_html=True)
 
-    with st.form("login_form"):
-        cod_inp = st.text_input("Código de Empleado", placeholder="Ej: E0200491").upper().strip()
+    # Formulario estricto de captura para mitigar re-ejecuciones por pulsaciones de teclas involuntarias
+    with st.form("contenedor_login_seguro"):
+        st.subheader("🔑 Acceso al Sistema")
+        codigo_ingresado = st.text_input(
+            "Código Identificador de Empleado", 
+            placeholder="Ej: E0200491",
+            help="Consulte con su supervisor si desconoce su código interno."
+        ).upper().strip()
 
-        if st.form_submit_button("🚀 Validar Código", use_container_width=True):
-            if cod_inp:
-                datos = obtener_datos_empleado(cod_inp)
-                if datos.get('encontrado'):
-                    st.session_state.logged_in = True
-                    st.session_state.cod_emp   = cod_inp
-                    st.session_state.nom_emp   = datos['nombre']
-                    st.session_state.empresa   = datos['empresa']
-                    st.session_state.regional  = datos['regional']
-                    st.rerun()
-                else:
-                    st.error(f"❌ Código '{cod_inp}' no encontrado. Verifica tu código de empleado.")
+        linea_espacio = st.markdown("<br>", unsafe_allow_html=True)
+
+        if st.form_submit_button("🚀 Validar Credenciales", use_container_width=True):
+            if codigo_ingresado:
+                with st.spinner("Consultando registros de personal..."):
+                    try:
+                        datos_empleado = obtener_datos_empleado(codigo_ingresado)
+                        
+                        if datos_empleado and datos_empleado.get('encontrado'):
+                            # Mutación controlada del Session State para autenticación exitosa
+                            st.session_state.logged_in = True
+                            st.session_state.cod_emp   = str(codigo_ingresado)
+                            st.session_state.nom_emp   = str(datos_empleado.get('nombre', 'Empleado Sin Nombre'))
+                            st.session_state.empresa   = str(datos_empleado.get('empresa', 'N/A'))
+                            st.session_state.regional  = str(datos_empleado.get('regional', 'N/A'))
+                            st.session_state.ultimo_rerun = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            st.success("✅ Acceso autorizado.")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Código '{codigo_ingresado}' no registrado en la base de datos de personal.")
+                    except Exception as ex_auth:
+                        st.error(f"Error técnico durante la verificación de identidad: {str(ex_auth)}")
             else:
-                st.error("⚠️ Ingresa tu código de empleado.")
+                st.error("⚠️ Entrada inválida: Debe ingresar un código de empleado para continuar.")
 
 
+# ==============================================================================
 # ═════════════════════════════════════════════════════════════════════════════
-# PANTALLA 2: PEDIDOS  (todo envuelto en @st.fragment)
-# El header/logo/estilos quedan fuera y NO se recargan al agregar al carrito.
+# PANTALLA 2: ENTORNO TRANSACCIONAL (SISTEMA DE PESTAÑAS TRIPLE - MOBILE FIRST)
 # ═════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 else:
-    # El header se renderiza UNA vez y no vuelve a ejecutarse dentro del fragment
-    logo_b64 = get_logo_b64()
-    logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="height:100px;object-fit:contain;">' if logo_b64 else "🛒"
+    logo_codificado = get_logo_b64()
+    html_presentacion_logo = f'<img src="data:image/png;base64,{logo_codificado}" style="height:100px;object-fit:contain;">' if logo_codificado else "🛒"
 
+    # Encabezado corporativo persistente (Fuera del fragmento de re-renderizado)
     st.markdown(f"""
     <div class="page-header">
-        {logo_html}
+        {html_presentacion_logo}
         <div>
-            <h2>Tu Pedido</h2>
-            <p>👤 {st.session_state.nom_emp} · 🔖 {st.session_state.cod_emp} · 🏢 {st.session_state.empresa or 'N/A'}</p>
+            <h2 style="font-family:\'DM Sans\', sans-serif;">Tu Pedido</h2>
+            <p style="font-family:\'DM Sans\', sans-serif;">👤 {st.session_state.nom_emp} · 🔖 {st.session_state.cod_emp} · 🏢 {st.session_state.empresa or 'PROESA'}</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
+    # Servicio de aislamiento para la extracción de registros históricos
+    @st.cache_data(ttl=120, show_spinner=False)
+    def ejecutar_carga_historial_segura(codigo_trabajador: str) -> pd.DataFrame:
+        """
+        Extracción defensiva del historial de compras directo desde la API de Sheets.
+        """
+        try:
+            df_historico = obtener_pedidos_empleado_sheets(codigo_trabajador, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME)
+            if df_historico is None:
+                return pd.DataFrame()
+            return df_historico
+        except Exception as ex_hist:
+            st.warning(f"No se pudo sincronizar el historial transaccional: {str(ex_hist)}")
+            return pd.DataFrame()
+
     # ──────────────────────────────────────────────────────────────────────────
-    # FRAGMENT: catálogo + carrito
-    # st.rerun(scope="fragment") solo rerenderiza ESTE bloque, no toda la página.
-    # El header, estilos y logo de arriba NO se vuelven a ejecutar.
+    # FRAGMENT: Núcleo Transaccional Asíncrono Localizado
+    # Evita la recarga costosa del Header HTML y Logo en cada adición de producto.
     # ──────────────────────────────────────────────────────────────────────────
     @st.fragment
     def render_catalogo_y_carrito():
-        col_pedido, col_carrito = st.columns([2, 1], gap="medium")
+        # Cálculo de métricas en tiempo real para retroalimentación en la pestaña
+        total_unidades_carrito = sum(int(item.get('cantidad', 0)) for item in st.session_state.carrito)
+        etiqueta_dinamica_carrito = f"🛒 Carrito ({total_unidades_carrito})" if total_unidades_carrito > 0 else "🛒 Carrito"
+        
+        # Despliegue de pestañas nativas unificadas para el bloqueo del scroll
+        tab_catalogo, tab_carrito, tab_historial = st.tabs([
+            "📦 Catálogo", 
+            etiqueta_dinamica_carrito,
+            "📋 Mis Pedidos"
+        ])
 
-        # ── COLUMNA 1: CATÁLOGO ──────────────────────────────────────────────
-        with col_pedido:
-            st.markdown('<div class="section-title">📦 Catálogo de Productos</div>', unsafe_allow_html=True)
+        # Extracción segura de nombres de columnas del inventario
+        col_nombre = "Nombre Producto" if "Nombre Producto" in df_inv.columns else df_inv.columns[2]
+        col_codigo = "Código Producto" if "Código Producto" in df_inv.columns else df_inv.columns[1]
+        col_stock  = "Stock"           if "Stock"           in df_inv.columns else df_inv.columns[3]
+        col_precio = "Precio Unitario" if "Precio Unitario" in df_inv.columns else df_inv.columns[4]
+        col_imagen = "Imagen"          if "Imagen"          in df_inv.columns else None
 
-            busqueda = st.text_input(
-                "Busca un producto...",
-                placeholder="Escribe el nombre o código para filtrar"
+        # ── SUB-MÓDULO: PESTAÑA 1 - CATÁLOGO DINÁMICO EN TARJETAS ────────────
+        with tab_catalogo:
+            st.markdown('<div class="section-title">📦 Productos en Promoción</div>', unsafe_allow_html=True)
+
+            filtro_busqueda = st.text_input(
+                "Filtrar catálogo en tiempo real:",
+                placeholder="Escriba palabras clave, marcas o códigos SKU...",
+                key="control_busqueda_inventario"
             )
 
-            col_nombre = "Nombre Producto" if "Nombre Producto" in df_inv.columns else df_inv.columns[2]
-            col_codigo = "Código Producto" if "Código Producto" in df_inv.columns else df_inv.columns[1]
-            col_stock  = "Stock"           if "Stock"           in df_inv.columns else df_inv.columns[3]
-            col_precio = "Precio Unitario" if "Precio Unitario" in df_inv.columns else df_inv.columns[4]
-
-            # Filtrado vectorizado: una sola operación sobre todo el df
-            if busqueda:
-                mascara = (
-                    df_inv[col_nombre].str.contains(busqueda, case=False, na=False) |
-                    df_inv[col_codigo].astype(str).str.contains(busqueda, case=False, na=False)
+            # Algoritmo de filtrado vectorizado basado en máscaras lógicas booleanas
+            if filtro_busqueda:
+                expresion_busqueda = str(filtro_busqueda).strip()
+                mascara_coincidencia = (
+                    df_inv[col_nombre].str.contains(expresion_busqueda, case=False, na=False) |
+                    df_inv[col_codigo].astype(str).str.contains(expresion_busqueda, case=False, na=False)
                 )
-                df_filtrado = df_inv[mascara].head(5)
+                df_visualizacion = df_inv[mascara_coincidencia].head(8)
             else:
-                df_filtrado = df_inv.head(5)
+                df_visualizacion = df_inv.head(6)
 
-            if df_filtrado.empty:
-                st.info("No se encontraron productos con ese nombre.")
+            if df_visualizacion.empty:
+                st.info("🔍 Ningún artículo del catálogo coincide con los criterios ingresados.")
             else:
-                st.caption(f"Mostrando {len(df_filtrado)} productos · escribe para filtrar")
+                st.caption(f"Visualizando {len(df_visualizacion)} ítems disponibles para solicitud inmediata.")
 
-                for _, fila in df_filtrado.iterrows():
-                    try:
-                        stock  = int(float(fila[col_stock]))
-                        precio = float(fila[col_precio])
-                        codigo = str(fila[col_codigo])
-                        nombre = fila[col_nombre]
-                    except Exception:
-                        continue
+                # Construcción geométrica de la cuadrícula de tarjetas (2 columnas por fila)
+                for fila_bloque in range(0, len(df_visualizacion), 2):
+                    columnas_grid = st.columns(2)
+                    
+                    for sub_columna in range(2):
+                        indice_calculado = fila_bloque + sub_columna
+                        if indice_calculado >= len(df_visualizacion):
+                            break # Ruptura controlada si la lista es impar
+                        
+                        registro_producto = df_visualizacion.iloc[indice_calculado]
+                        
+                        try:
+                            unidades_stock = int(float(registro_producto[col_stock]))
+                            costo_unitario = float(registro_producto[col_precio])
+                            sku_producto   = str(registro_producto[col_codigo])
+                            nombre_completo = str(registro_producto[col_nombre]).strip()
+                            
+                            # Resolución de URL de imagen con fallback defensivo
+                            enlace_imagen = registro_producto[col_imagen] if col_imagen and pd.notna(registro_producto[col_imagen]) else ""
+                        except Exception:
+                            continue
 
-                    if stock <= 0:
-                        stock_badge = '<span class="stock-out">❌ Agotado</span>'
-                        disabled = True
-                    else:
-                        stock_badge = f'<span class="stock-ok">✅ {stock} disponibles</span>'
-                        disabled = False
+                        # Evaluación lógica del estado físico del stock
+                        if unidades_stock <= 0:
+                            bloque_badge_html = '<span class="stock-out">❌ Agotado en Planta</span>'
+                            bloqueo_interaccion = True
+                        elif unidades_stock <= 5:
+                            bloque_badge_html = f'<span class="stock-warn">⚠️ Últimas {unidades_stock} ud.</span>'
+                            bloqueo_interaccion = False
+                        else:
+                            bloque_badge_html = f'<span class="stock-ok">✅ {unidades_stock} Disponibles</span>'
+                            bloqueo_interaccion = False
 
-                    with st.container():
-                        c1, c2, c3 = st.columns([2, 1.2, 0.8])
-                        with c1:
-                            st.markdown(f"**{nombre}**\n`{codigo}`")
-                        with c2:
-                            st.markdown(f"**Bs {precio:,.2f}**\n{stock_badge}", unsafe_allow_html=True)
-                        with c3:
-                            if not disabled:
-                                cant = st.number_input(
-                                    "Cant", min_value=1, max_value=max(stock, 1),
-                                    value=1, key=f"qty_{codigo}"
-                                )
-                                if st.button("➕", key=f"btn_{codigo}"):
-                                    st.session_state.carrito.append({
-                                        "codigo_producto": codigo,
-                                        "producto": nombre,
-                                        "cantidad": int(cant),
-                                        "precio_unitario": precio,
-                                        "subtotal": precio * int(cant)
-                                    })
-                                    # ✅ Solo rerenderiza el fragment, NO toda la página
-                                    st.rerun(scope="fragment")
+                        with columnas_grid[sub_columna]:
+                            # Invocación de la interfaz HTML de la tarjeta desde componentes.py
+                            render_tarjeta_producto(
+                                codigo=sku_producto, 
+                                nombre=nombre_completo, 
+                                precio=costo_unitario, 
+                                stock_badge=bloque_badge_html, 
+                                url_foto=enlace_imagen
+                            )
+                            
+                            # Renderizado de controladores nativos interactivos de Streamlit acoplados por debajo
+                            if not bloqueo_interaccion:
+                                cols_controles = st.columns([1, 1.3])
+                                with cols_controles[0]:
+                                    cantidad_seleccionada = st.number_input(
+                                        "Cantidad", 
+                                        min_value=1, 
+                                        max_value=max(unidades_stock, 1),
+                                        value=1, 
+                                        step=1,
+                                        key=f"input_num_{sku_producto}", 
+                                        label_visibility="collapsed"
+                                    )
+                                with cols_controles[1]:
+                                    if st.button("➕ Solicitar", key=f"btn_add_{sku_producto}", use_container_width=True):
+                                        # Estructuración de datos del ítem transaccional
+                                        st.session_state.carrito.append({
+                                            "codigo_producto": sku_producto,
+                                            "producto": nombre_completo,
+                                            "cantidad": int(cantidad_seleccionada),
+                                            "precio_unitario": costo_unitario,
+                                            "subtotal": costo_unitario * int(cantidad_seleccionada)
+                                        })
+                                        st.rerun(scope="fragment")
+                            else:
+                                st.button("🚫 No Disponible", key=f"btn_disabled_{sku_producto}", disabled=True, use_container_width=True)
+                            
+                            st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── COLUMNA 2: CARRITO ───────────────────────────────────────────────
-        with col_carrito:
-            st.markdown('<div class="section-title">🛒 Tu Carrito</div>', unsafe_allow_html=True)
+        # ── SUB-MÓDULO: PESTAÑA 2 - GESTIÓN DEL CARRITO TRANSACCIONAL ────────
+        # ── SUB-MÓDULO: PESTAÑA 2 - EL CARRITO DE COMPRAS CLONADO ─────────────
+        with tab_carrito:
+            st.markdown('<div class="section-title">🛒 Carrito de Compras</div>', unsafe_allow_html=True)
 
             if st.session_state.carrito:
-                for i, item in enumerate(st.session_state.carrito):
-                    fila_item  = indice_productos.get(item['producto'])
-                    stock_max  = int(fila_item[col_stock]) if fila_item is not None else 99
+                # Importamos la subfunción estética de componentes
+                from src.componentes import render_estructura_item_carrito
 
-                    col_nombre, col_cant, col_precio, col_del = st.columns([2.5, 1.2, 1.2, 0.5])
+                # Envolvemos todos los ítems en el contenedor blanco de la captura
+                st.markdown('<div class="contenedor-carrito">', unsafe_allow_html=True)
+                
+                for indice_posicion, item_carrito in enumerate(st.session_state.carrito):
+                    datos_maestros_prod = indice_productos.get(item_carrito['producto'])
+                    techo_stock_real = int(float(datos_maestros_prod[col_stock])) if datos_maestros_prod is not None else 999
+                    enlace_foto = datos_maestros_prod[col_imagen] if datos_maestros_prod is not None and col_imagen in datos_maestros_prod else ""
 
-                    with col_nombre:
-                        st.markdown(f"**{item['producto']}**\n`Bs {item['precio_unitario']:,.2f} c/u`")
+                    # Layout de 3 columnas para encajar los controles interactivos de Streamlit sobre el diseño CSS
+                    c_render, c_controles, c_eliminar = st.columns([2.5, 1.2, 0.4])
 
-                    with col_cant:
-                        nueva_cant = st.number_input(
-                            "Cantidad",
+                    with c_render:
+                        # Generamos la estructura base (Imagen, Título y Precio a la derecha)
+                        html_esqueleto = render_estructura_item_carrito(
+                            nombre=item_carrito['producto'],
+                            precio_total=item_carrito['subtotal'],
+                            url_foto=enlace_foto
+                        )
+                        st.markdown(f'<div class="item-carrito">{html_esqueleto}</div>', unsafe_allow_html=True)
+
+                    with c_controles:
+                        # Selector compacto imitando el "< 1 >" de tu captura
+                        st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+                        cantidad_modificada = st.number_input(
+                            "Cant",
                             min_value=1,
-                            max_value=stock_max,
-                            value=item['cantidad'],
+                            max_value=techo_stock_real,
+                            value=int(item_carrito['cantidad']),
                             step=1,
-                            key=f"edit_cant_{i}",
+                            key=f"modificar_cant_key_{indice_posicion}",
                             label_visibility="collapsed"
                         )
-                        if nueva_cant != item['cantidad']:
-                            st.session_state.carrito[i]['cantidad'] = nueva_cant
-                            st.session_state.carrito[i]['subtotal'] = nueva_cant * item['precio_unitario']
+                        
+                        if int(cantidad_modificada) != int(item_carrito['cantidad']):
+                            st.session_state.carrito[indice_posicion]['cantidad'] = int(cantidad_modificada)
+                            st.session_state.carrito[indice_posicion]['subtotal'] = int(cantidad_modificada) * item_carrito['precio_unitario']
                             st.rerun(scope="fragment")
 
-                    with col_precio:
-                        st.markdown(f"**Bs {item['subtotal']:,.2f}**")
-
-                    with col_del:
-                        if st.button("❌", key=f"del_{i}"):
-                            st.session_state.carrito.pop(i)
+                    with c_eliminar:
+                        # Botón basurero alineado a la derecha
+                        st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+                        if st.button("🗑️", key=f"btn_quitar_pos_{indice_posicion}", help="Eliminar producto"):
+                            st.session_state.carrito.pop(indice_posicion)
                             st.rerun(scope="fragment")
+                
+                st.markdown('</div>', unsafe_allow_html=True) # Cierre del contenedor blanco
 
-                total = sum(item['subtotal'] for item in st.session_state.carrito)
+                # Cálculo consolidado final
+                monto_total_pedido = sum(float(item['subtotal']) for item in st.session_state.carrito)
+                
+                # Render del total como en la imagen inferior
                 st.markdown(f"""
-                <div class="carrito-total">
-                    <div style="font-size:0.75rem;color:#A8B2C8;margin-bottom:0.3rem">TOTAL</div>
-                    <div style="font-size:2rem;font-weight:700;font-family:'DM Mono',monospace">Bs {total:,.2f}</div>
+                <hr style='border-color: #EBEBEB; margin: 1rem 0;'>
+                <div class="carrito-total-clon">
+                    <span class="label-total">Total:</span>
+                    <span class="monto-total">Bs {monto_total_pedido:,.2f}</span>
                 </div>
                 """, unsafe_allow_html=True)
 
-                if st.button("✅ ENVIAR PEDIDO", type="primary", use_container_width=True):
-                    _enviar_pedido()
-
+                if st.button("INICIAR COMPRE / ENVIAR PEDIDO", type="primary", use_container_width=True, key="btn_enviar_pedido_final_tabs"):
+                    ejecutar_procesamiento_pedido_global()
             else:
-                st.info("Tu carrito está vacío.\nAgrega productos a la izquierda.")
+                st.info("Tu carrito está vacío. Agrega productos desde la pestaña de Catálogo.")
+        # ── SUB-MÓDULO: PESTAÑA 3 - HISTORIAL EXCLUSIVO DE PEDIDOS ANTERIORES ──
+        with tab_historial:
+            st.markdown('<div class="section-title">📋 Registro Histórico de Compras</div>', unsafe_allow_html=True)
+            
+            df_pedidos_pasados = ejecutar_carga_historial_segura(st.session_state.cod_emp)
+
+            if df_pedidos_pasados is not None and not df_pedidos_pasados.empty:
+                st.caption("Últimos artículos solicitados por su cuenta de empleado (Orden cronológico descendente):")
+                
+                # Inversión de índices nativos de Pandas para ubicar el último registro arriba del todo
+                df_historico_invertido = df_pedidos_pasados.tail(10).iloc[::-1]
+                
+                for fila_id, datos_pedido_historico in df_historico_invertido.iterrows():
+                    with st.container():
+                        st.markdown(
+                            f"📦 **{datos_pedido_historico.get('Nombre Producto', 'Artículo Corporativo')}**<br>"
+                            f"🔢 Volumen solicitado: **{datos_pedido_historico.get('Cantidad', 0)} unidades**<br>"
+                            f"📅 <small style='color:#777;'>Registrado en fecha: {datos_pedido_historico.get('Fecha Registro', 'N/A')}</small>", 
+                            unsafe_allow_html=True
+                        )
+                        st.markdown("<hr style='margin:0.4rem 0; border-style: dashed; border-color:#E0E0E0;'>", unsafe_allow_html=True)
+            else:
+                st.info("No se registran transacciones previas asociadas a su código de empleado.")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # FUNCIÓN: enviar pedido (fuera del fragment para poder hacer st.rerun() global)
+    # FUNCIÓN INTERNA TRANSACCIONAL DE DISPARO GLOBAL
+    # Ejecutada fuera del fragmento para posibilitar limpiezas globales de caché y globos
     # ──────────────────────────────────────────────────────────────────────────
-    def _enviar_pedido():
-        items_para_sheets = []
-        for item in st.session_state.carrito:
-            fila = indice_productos.get(item['producto'])
-            if fila is None:
+    def ejecutar_procesamiento_pedido_global():
+        """
+        Extrae los elementos actuales en el carrito, valida correspondencias de 
+        columnas e inicia la persistencia secuencial e inyección Batch a Sheets.
+        """
+        if not st.session_state.carrito:
+            st.error("No se puede procesar un carrito de compras vacío.")
+            return
+
+        items_preparados_hojas = []
+        for item_actual in st.session_state.carrito:
+            datos_matriz_fila = indice_productos.get(item_actual['producto'])
+            if datos_matriz_fila is None:
                 continue
-            col_linea   = "Línea"          if "Línea"          in fila.index else fila.index[0]
-            col_codigo2 = "Código Producto" if "Código Producto" in fila.index else fila.index[1]
-            col_stock2  = "Stock"           if "Stock"          in fila.index else fila.index[3]
-            col_empresa = "Empresa"         if "Empresa"        in fila.index else fila.index[5]
+            
+            # Extracción robusta de índices alternativos para evitar quiebres de estructuras por Sheets
+            idx_linea   = "Línea"          if "Línea"          in datos_matriz_fila.index else datos_matriz_fila.index[0]
+            idx_codigo2 = "Código Producto" if "Código Producto" in datos_matriz_fila.index else datos_matriz_fila.index[1]
+            idx_stock2  = "Stock"           if "Stock"          in datos_matriz_fila.index else datos_matriz_fila.index[3]
+            idx_empresa = "Empresa"         if "Empresa"        in datos_matriz_fila.index else datos_matriz_fila.index[5]
 
-            items_para_sheets.append({
-                "codigo_producto": str(fila[col_codigo2]),
-                "producto":        item['producto'],
-                "cantidad":        item['cantidad'],
-                "precio_unitario": item['precio_unitario'],
-                "linea":           str(fila[col_linea]),
+            items_preparados_hojas.append({
+                "codigo_producto": str(datos_matriz_fila[idx_codigo2]),
+                "producto":        str(item_actual['producto']),
+                "cantidad":        int(item_actual['cantidad']),
+                "precio_unitario": float(item_actual['precio_unitario']),
+                "linea":           str(datos_matriz_fila[idx_linea]),
                 "descuento":       0,
-                "stock_actual":    int(fila[col_stock2]),
-                "empresa":         st.session_state.empresa or str(fila[col_empresa])
+                "stock_actual":    int(float(datos_matriz_fila[idx_stock2])),
+                "empresa":         st.session_state.empresa or str(datos_matriz_fila[idx_empresa])
             })
 
-        # ── FEEDBACK VISUAL mientras se procesa ─────────────────────────────
-        with st.status("Procesando tu pedido...", expanded=True) as status:
-            st.write("📝 Registrando pedido...")
-            exito = guardar_pedido_sheets(
-                st.session_state.cod_emp,
-                st.session_state.nom_emp,
-                items_para_sheets,
-                PEDIDOS_SHEET_URL,
-                PEDIDOS_HOJA_NAME
-            )
-
-            if exito:
-                st.write("📦 Actualizando stock en la nube...")
-                # ✅ UNA sola llamada HTTP en lugar de N llamadas secuenciales
-                actualizar_stock_batch_sheets(
-                    items=[{
-                        "codigo_producto":  i["codigo_producto"],
-                        "cantidad_a_restar": i["cantidad"]
-                    } for i in items_para_sheets],
-                    url_sheet=INVENTARIO_SHEET_URL,
-                    hoja=INVENTARIO_HOJA_NAME
+        # Despliegue de estado de carga visual interactiva
+        with st.status("Estableciendo conexión y procesando orden...", expanded=True) as componente_estado:
+            try:
+                st.write("📝 Escribiendo registro de transacciones en la nube...")
+                resultado_guardado = guardar_pedido_sheets(
+                    st.session_state.cod_emp,
+                    st.session_state.nom_emp,
+                    items_preparados_hojas,
+                    PEDIDOS_SHEET_URL,
+                    PEDIDOS_HOJA_NAME
                 )
+                if resultado_guardado:
+                    st.write("📦 Ajustando niveles de inventario físico (Procesamiento Batch)...")
+                    
+                    # Ejecución del lote unificado para mitigación de sobrecarga HTTP
+                    actualizar_stock_batch_sheets(
+                        items=[{
+                            "codigo_producto":  str(it["codigo_producto"]),
+                            "cantidad_a_restar": int(it["cantidad"])
+                        } for it in items_preparados_hojas],
+                        url_sheet=INVENTARIO_SHEET_URL,
+                        hoja=INVENTARIO_HOJA_NAME
+                    )
 
-                st.session_state.carrito = []
-                st.cache_data.clear()
-                status.update(label="✅ ¡Pedido enviado con éxito!", state="complete")
-                st.balloons()
-                st.rerun()
-            else:
-                status.update(label="❌ Error al enviar pedido.", state="error")
-                st.error("No se pudo guardar el pedido. Intenta de nuevo.")
+                    # Limpieza integral de estructuras temporales post-venta exitosa
+                    st.session_state.carrito = []
+                    st.cache_data.clear() # Invalidación de caché para obligar recargas de stock fresco
+                    
+                    componente_estado.update(label="✅ Transacción Procesada Satisfactoriamente", state="complete")
+                    
+                    # 🚀 NOTIFICACIONES DE ÉXITO AÑADIDAS:
+                    # 1. Notificación flotante móvil en la esquina inferior derecha
+                    st.toast("🎉 ¡Tu pedido ha sido enviado con éxito!", icon="🛒")
+                    
+                    # 2. Mensaje de confirmación visual fijo sobre la interfaz
+                    st.success("🎉 ¡Pedido registrado con éxito! El inventario ha sido actualizado de forma segura.")
+                    
+                    # Lanzamiento de globos festivos
+                    st.balloons()
+                    
+                    # ⏳ Pausa de 1.5 segundos para que el usuario asimile el mensaje antes de borrar la pantalla
+                    import time
+                    time.sleep(1.5)
+                    
+                    st.rerun()
+                else:
+                    componente_estado.update(label="❌ Denegado: Falló la escritura de la orden.", state="error")
+                    st.error("El servidor de Google Sheets rechazó la inserción del registro. Reintente.")
+            except Exception as ex_proc:
+                componente_estado.update(label="❌ Falla Crítica Operacional", state="error")
+                st.error(f"Detalle técnico de la falla: {str(ex_proc)}")
 
-    # Llamar al fragment
+    # Lanzamiento del componente estructurado
     render_catalogo_y_carrito()
 
-    # ── HISTORIAL ────────────────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown('<div class="section-title">📋 Tus Pedidos Anteriores</div>', unsafe_allow_html=True)
-
-    @st.cache_data(ttl=120, show_spinner=False)
-    def _cargar_historial(cod_emp):
-        return obtener_pedidos_empleado_sheets(cod_emp, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME)
-
-    mis_pedidos = _cargar_historial(st.session_state.cod_emp)
-
-    if not mis_pedidos.empty:
-        for _, pedido in mis_pedidos.tail(5).iterrows():
-            st.markdown(
-                f"📦 **{pedido.get('Nombre Producto', 'N/A')}** · {pedido.get('Cantidad', 0)} ud.\n\n"
-                f"📅 {pedido.get('Fecha Registro', '')}"
-            )
-    else:
-        st.info("No has hecho pedidos aún.")
-
-    st.markdown("---")
-    if st.button("🚪 Cerrar Sesión"):
-        for key in ['logged_in', 'cod_emp', 'nom_emp', 'empresa', 'regional', 'carrito']:
-            st.session_state[key] = False if key == 'logged_in' else ([] if key == 'carrito' else None)
-        st.rerun()
+    # ── PANEL DE CIERRE DE SESIÓN SEGURO DE LA APLICACIÓN ───────────────────
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    if st.button("🚪 Finalizar Jornada / Cerrar Sesión", use_container_width=True, help="Limpia las credenciales temporales del navegador"):
+        with st.spinner("Removiendo tokens de identidad temporales..."):
+            for propiedad_estado in ['logged_in', 'cod_emp', 'nom_emp', 'empresa', 'regional', 'carrito']:
+                if propiedad_estado == 'logged_in':
+                    st.session_state[propiedad_estado] = False
+                elif propiedad_estado == 'carrito':
+                    st.session_state[propiedad_estado] = []
+                else:
+                    st.session_state[propiedad_estado] = None
+            st.rerun()
