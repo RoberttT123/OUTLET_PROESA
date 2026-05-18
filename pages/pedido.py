@@ -375,7 +375,6 @@ else:
                             
                             st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── SUB-MÓDULO: PESTAÑA 2 - GESTIÓN DEL CARRITO TRANSACCIONAL ────────
         # ── SUB-MÓDULO: PESTAÑA 2 - EL CARRITO DE COMPRAS CLONADO ─────────────
         with tab_carrito:
             st.markdown('<div class="section-title">🛒 Carrito de Compras</div>', unsafe_allow_html=True)
@@ -443,7 +442,7 @@ else:
                 </div>
                 """, unsafe_allow_html=True)
 
-                if st.button("INICIAR COMPRE / ENVIAR PEDIDO", type="primary", use_container_width=True, key="btn_enviar_pedido_final_tabs"):
+                if st.button("REALIZAR PEDIDO", type="primary", use_container_width=True, key="btn_enviar_pedido_final_tabs"):
                     ejecutar_procesamiento_pedido_global()
             else:
                 st.info("Tu carrito está vacío. Agrega productos desde la pestaña de Catálogo.")
@@ -510,7 +509,7 @@ else:
         # Despliegue de estado de carga visual interactiva
         with st.status("Estableciendo conexión y procesando orden...", expanded=True) as componente_estado:
             try:
-                st.write("📝 Escribiendo registro de transacciones en la nube...")
+                st.write("📝 Registrando pedido...")
                 resultado_guardado = guardar_pedido_sheets(
                     st.session_state.cod_emp,
                     st.session_state.nom_emp,
@@ -519,7 +518,7 @@ else:
                     PEDIDOS_HOJA_NAME
                 )
                 if resultado_guardado:
-                    st.write("📦 Ajustando niveles de inventario físico (Procesamiento Batch)...")
+                    st.write("📦 Ajustando niveles de inventario físico...")
                     
                     # Ejecución del lote unificado para mitigación de sobrecarga HTTP
                     actualizar_stock_batch_sheets(
@@ -564,7 +563,7 @@ else:
 
     # ── PANEL DE CIERRE DE SESIÓN SEGURO DE LA APLICACIÓN ───────────────────
     st.markdown("<br><br>", unsafe_allow_html=True)
-    if st.button("🚪 Finalizar Jornada / Cerrar Sesión", use_container_width=True, help="Limpia las credenciales temporales del navegador"):
+    if st.button("🚪Cerrar Sesión", use_container_width=True, help="Limpia las credenciales temporales del navegador"):
         with st.spinner("Removiendo tokens de identidad temporales..."):
             for propiedad_estado in ['logged_in', 'cod_emp', 'nom_emp', 'empresa', 'regional', 'carrito']:
                 if propiedad_estado == 'logged_in':
