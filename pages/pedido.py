@@ -42,7 +42,6 @@ except ImportError as e:
     st.code(str(e))
     st.stop()
 
-# Configuración de página nativa de Streamlit
 try:
     st.set_page_config(
         page_title="Mi Pedido - Outlet PROESA",
@@ -53,16 +52,14 @@ try:
 except Exception:
     pass
 
-# Aplicación de la hoja de estilos global del proyecto
 try:
     cargar_estilos_css()
 except Exception as e:
     st.warning(f"⚠️ Estilos CSS base no aplicados: {e}")
 
-# Inyección de estilos CSS extras para emular pestañas nativas usando st.radio horizontal
+# CSS extra: tabs via radio + alertas de stock
 st.markdown("""
 <style>
-/* ── Hacer que st.radio horizontal parezca exactamente st.tabs ── */
 div[data-testid="stRadio"] {
     border-bottom: 1px solid #e6e6e6;
     margin-bottom: 1.2rem;
@@ -87,20 +84,15 @@ div[data-testid="stRadio"] label {
     transition: color 0.15s;
 }
 div[data-testid="stRadio"] label:hover { color: #1A1A2E !important; }
-
-/* Configuración del estado activo de la pestaña */
 div[data-testid="stRadio"] label[data-checked="true"] {
     color: #1A1A2E !important;
     font-weight: 600 !important;
     border-bottom: 3px solid #E63946 !important;
 }
-
-/* Ocultación de los elementos de radio nativos del navegador */
 div[data-testid="stRadio"] [data-testid="stWidgetLabel"] { display: none !important; }
 div[data-testid="stRadio"] span[data-testid="stMarkdownContainer"] p { margin: 0; }
 div[data-testid="stRadio"] div[data-baseweb="radio"] > div:first-child { display: none !important; }
 
-/* ── Contenedor Estético para Alertas de Falta de Stock ── */
 .alerta-stock-container {
     background-color: #FFF5F5;
     border-left: 4px solid #E63946;
@@ -114,9 +106,6 @@ div[data-testid="stRadio"] div[data-baseweb="radio"] > div:first-child { display
     font-size: 1.05rem;
     font-weight: 600;
     margin-bottom: 0.6rem;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
 }
 .alerta-stock-lista {
     color: #4A4A4A;
@@ -126,24 +115,20 @@ div[data-testid="stRadio"] div[data-baseweb="radio"] > div:first-child { display
     padding-left: 1.1rem;
 }
 .alerta-stock-sugerencia {
-    color: #666666;
+    color: #666;
     font-size: 0.88rem;
     border-top: 1px dashed #F3C6C9;
     padding-top: 0.6rem;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
 }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ==============================================================================
-# 2. PROCESAMIENTO MULTIMEDIA (LOGO EMPRESARIAL)
+# 2. LOGO
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def get_logo_b64(path="assets/logo_proesa.png"):
-    """Codifica la imagen del logo local a Base64 para inyección HTML segura."""
     try:
         with open(path, "rb") as f:
             return base64.b64encode(f.read()).decode()
@@ -152,16 +137,16 @@ def get_logo_b64(path="assets/logo_proesa.png"):
 
 
 # ==============================================================================
-# 3. INICIALIZACIÓN DEL SESSION STATE DEL USUARIO
+# 3. SESSION STATE
 # ==============================================================================
 defaults = {
-    'logged_in': False, 
-    'cod_emp': None, 
-    'nom_emp': None,
-    'empresa': None,    
-    'regional': None, 
-    'carrito': [],
-    'tab_idx': 0,       # Índices: 0 = Catálogo, 1 = Carrito, 2 = Historial
+    'logged_in': False,
+    'cod_emp':   None,
+    'nom_emp':   None,
+    'empresa':   None,
+    'regional':  None,
+    'carrito':   [],
+    'tab_idx':   0,   # 0=Catálogo  1=Carrito  2=Historial
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -169,17 +154,15 @@ for k, v in defaults.items():
 
 
 # ==============================================================================
-# 4. FUNCIONES DE PARSEO ROBUSTO (Compatibilidad estricta con Sheets stringified)
+# 4. PARSEO ROBUSTO
 # ==============================================================================
 def _parse_stock(v) -> int:
-    """Parsea de forma segura valores de stock evitando rupturas por comas o flotantes."""
     try:
         return max(0, int(float(str(v).strip().replace(',', ''))))
     except Exception:
         return 0
 
 def _parse_precio(v) -> float:
-    """Parsea de forma segura valores monetarios de productos."""
     try:
         return float(str(v).strip().replace(',', '.'))
     except Exception:
@@ -187,11 +170,10 @@ def _parse_precio(v) -> float:
 
 
 # ==============================================================================
-# 5. CARGA DE DATOS CENTRALIZADA E INDEXACIÓN
+# 5. INVENTARIO E ÍNDICE
 # ==============================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def cargar_inventario():
-    """Descarga de forma segura el DataFrame de inventario actual desde la API."""
     try:
         df = obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
         return df if df is not None and not df.empty else pd.DataFrame()
@@ -201,21 +183,16 @@ def cargar_inventario():
 
 @st.cache_data(show_spinner=False)
 def construir_indice(shape_key):
-    """Construye un mapa de búsqueda en memoria basado en el Nombre del Producto."""
     col = "Nombre Producto" if "Nombre Producto" in df_inv.columns else df_inv.columns[2]
     return {str(r[col]).strip(): r for _, r in df_inv.iterrows() if pd.notna(r[col])}
 
-
-# Ejecución de la carga de datos inicial
 df_inv = cargar_inventario()
 if df_inv.empty:
-    st.error("❌ Catálogo de inventario no disponible. Revisa la conectividad de red o config.py.")
+    st.error("❌ Catálogo no disponible. Revisa la conectividad o config.py.")
     st.stop()
 
-# Generación del índice rápido de consulta
 indice_productos = construir_indice(str(df_inv.shape))
 
-# Mapeo dinámico y posicional de columnas del inventario
 COL_NOMBRE = "Nombre Producto" if "Nombre Producto" in df_inv.columns else df_inv.columns[2]
 COL_CODIGO = "Código Producto" if "Código Producto" in df_inv.columns else df_inv.columns[1]
 COL_STOCK  = "Stock"           if "Stock"           in df_inv.columns else df_inv.columns[3]
@@ -226,15 +203,13 @@ COL_IMAGEN = "Imagen"          if "Imagen"          in df_inv.columns else None
 
 
 # ==============================================================================
-# PANTALLA 1: PORTAL DE ACCESO Y LOGIN DE EMPLEADOS
+# PANTALLA 1: LOGIN
 # ==============================================================================
 if not st.session_state.logged_in:
     logo = get_logo_b64()
-    html_logo = f'<img src="data:image/png;base64,{logo}" style="height:210px;width:auto;object-fit:contain;margin-top:-20px;">' if logo else ''
-    
     st.markdown(f"""
     <div class="hero-login">
-        {html_logo}
+        {f'<img src="data:image/png;base64,{logo}" style="height:210px;width:auto;object-fit:contain;margin-top:-20px;">' if logo else ''}
         <h1 style="margin-top:0;">Outlet PROESA</h1>
         <p style="margin-bottom:0;">Sistema de Pedidos Internos para Empleados</p>
     </div>
@@ -244,7 +219,7 @@ if not st.session_state.logged_in:
         st.subheader("🔑 Acceso al Sistema")
         cod = st.text_input(
             "Código de Empleado", placeholder="Ej: E0200491",
-            help="Consulte con su supervisor asignado si desconoce su código corporativo o de planilla."
+            help="Consulte con su supervisor si desconoce su código corporativo."
         ).upper().strip()
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -262,28 +237,26 @@ if not st.session_state.logged_in:
                             st.success("✅ Acceso autorizado.")
                             st.rerun()
                         else:
-                            st.error(f"❌ Código '{cod}' no registrado en la base de datos de la empresa.")
+                            st.error(f"❌ Código '{cod}' no registrado en la base de datos.")
                     except Exception as e:
                         st.error(f"Error en verificación: {e}")
             else:
-                st.error("⚠️ Por favor, ingresa tu código de empleado para continuar.")
+                st.error("⚠️ Ingresa tu código de empleado para continuar.")
 
 
 # ==============================================================================
-# PANTALLA 2: ENTORNO PRINCIPAL DE PEDIDOS DE COMPRA
+# PANTALLA 2: PEDIDOS
 # ==============================================================================
 else:
-    # ── VERIFICACIÓN RE-RUN: Lanzar toast de éxito guardado en memoria antes de dibujar la UI ──
-    if "lanzar_toast_exito" in st.session_state and st.session_state["lanzar_toast_exito"]:
+    # Toast de éxito que sobrevive al rerun
+    if st.session_state.get("lanzar_toast_exito"):
         st.toast("🎉 ¡Tu pedido fue enviado con éxito!", icon="🛒")
         del st.session_state["lanzar_toast_exito"]
 
     logo = get_logo_b64()
-    html_header_media = f'<img src="data:image/png;base64,{logo}" style="height:100px;object-fit:contain;">' if logo else "🛒"
-    
     st.markdown(f"""
     <div class="page-header">
-        {html_header_media}
+        {f'<img src="data:image/png;base64,{logo}" style="height:100px;object-fit:contain;">' if logo else "🛒"}
         <div>
             <h2>Tu Pedido</h2>
             <p>👤 {st.session_state.nom_emp} · 🔖 {st.session_state.cod_emp} · 🏢 {st.session_state.empresa or 'PROESA'}</p>
@@ -293,91 +266,78 @@ else:
 
     @st.cache_data(ttl=120, show_spinner=False)
     def cargar_historial(cod):
-        """Carga el historial de compras del empleado directamente desde Sheets."""
         try:
             df = obtener_pedidos_empleado_sheets(cod, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME)
             return df if df is not None else pd.DataFrame()
         except Exception:
             return pd.DataFrame()
 
-    # ── FUNCIÓN TRANSACCIONAL GLOBAL PERFECCIONADA ──
+    # ──────────────────────────────────────────────────────────────────────────
+    # FUNCIÓN TRANSACCIONAL (fuera del fragment para st.rerun() global)
+    # ──────────────────────────────────────────────────────────────────────────
     def ejecutar_envio_transaccional(items):
-        """
-        Envía de forma segura el lote del pedido a procesar.
-        Maneja bloqueos lógicos de concurrencia y despliega notificaciones instantáneas si falla.
-        """
         if "lista_productos_colision" in st.session_state:
             del st.session_state["lista_productos_colision"]
 
         with st.status("Procesando tu pedido...", expanded=True) as estado:
             try:
-                st.write("🔍 Verificando disponibilidad y reservando stock en tiempo real...")
-                
-                formato_items = [{"codigo_producto": i["codigo_producto"], "cantidad_a_restar": i["cantidad"]} for i in items]
+                st.write("🔍 Verificando disponibilidad y reservando stock...")
+
                 transaccion = procesar_descuento_stock_seguro(
-                    items=formato_items,
+                    items=[{
+                        "codigo_producto": i["codigo_producto"],
+                        "cantidad_a_restar": i["cantidad"]
+                    } for i in items],
                     url_sheet=INVENTARIO_SHEET_URL,
                     hoja=INVENTARIO_HOJA_NAME
                 )
-                
-                # CONTROL DE FRACASO: Concurrencia detectada, otra persona ganó las unidades antes
+
+                # ── FRACASO: stock insuficiente por concurrencia ───────────────
                 if not transaccion["exito"]:
                     estado.update(label="⚠️ Pedido rechazado por falta de stock.", state="error")
-                    
-                    # Guardamos los productos afectados en una lista estructurada para la UI limpia
-                    detalles_html = ""
-# CONTROL DE FRACASO: Concurrencia detectada, otra persona ganó las unidades antes
-                if not transaccion["exito"]:
-                    estado.update(label="⚠️ Pedido rechazado por falta de stock.", state="error")
-                    
-                    # 1. Guardamos los productos afectados para la interfaz
+
                     detalles_html = ""
                     for p in transaccion["sin_stock"]:
-                        detalles_html += f"<li><b>{p['producto']}</b>: Solicitaste {p['pedido']} ud., pero otra persona finalizó su pedido un instante antes y agotó las existencias (Stock real: <b>{p['disponible']} ud.</b>).</li>"
-                    
+                        detalles_html += (
+                            f"<li><b>{p['producto']}</b>: Solicitaste {p['pedido']} ud., "
+                            f"pero el stock real es <b>{p['disponible']} ud.</b></li>"
+                        )
                     st.session_state["lista_productos_colision"] = detalles_html
-                    
-                    # 2. Notificación flotante de error instantánea
-                    st.toast("⚠️ Error: No se pudo enviar el pedido. ¡Se agotó el stock!", icon="❌")
-                    
-                    # ── ¡AQUÍ ESTÁ EL TRUCO DE MAGIA! ──
-                    # 3. Forzamos la limpieza de la caché de este usuario específico
+                    st.toast("⚠️ No se pudo enviar el pedido: stock agotado.", icon="❌")
                     st.cache_data.clear()
-                    
-                    # 4. Hacemos un rerun para que el catálogo se recargue en segundo plano inmediatamente,
-                    #    pero SIN desloguear al vendedor ni sacarlo de la pestaña del carrito.
                     st.rerun()
                     return False
 
-                # CONTROL DE ÉXITO: El stock ya está apartado en la nube, escribimos el log de auditoría
+                # ── ÉXITO: stock apartado, guardar registro ───────────────────
                 st.write("📝 Guardando el registro oficial del pedido...")
                 ok = guardar_pedido_sheets(
-                    st.session_state.cod_emp, st.session_state.nom_emp,
-                    items, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME
+                    st.session_state.cod_emp,
+                    st.session_state.nom_emp,
+                    items,
+                    PEDIDOS_SHEET_URL,
+                    PEDIDOS_HOJA_NAME
                 )
-                
+
                 if ok:
                     st.session_state.carrito = []
                     st.session_state.tab_idx = 0
                     st.cache_data.clear()
-                    
-                    # Guardamos la bandera de éxito para que el toast sobreviva de forma limpia al rerun
                     st.session_state["lanzar_toast_exito"] = True
                     estado.update(label="✅ ¡Pedido procesado con éxito!", state="complete")
+                    st.rerun()
                     return True
                 else:
-                    estado.update(label="❌ Error al escribir el registro físico del pedido.", state="error")
-                    st.error("El stock fue apartado correctamente pero la fila de control falló. Contacta al administrador.")
+                    estado.update(label="❌ Error al escribir el registro.", state="error")
+                    st.error("El stock fue apartado pero falló la escritura. Contacta al administrador.")
                     return False
 
             except Exception as e:
                 estado.update(label="❌ Error inesperado.", state="error")
-                st.error(f"Detalle de excepción: {e}")
+                st.error(f"Detalle: {e}")
                 return False
 
-
     # ──────────────────────────────────────────────────────────────────────────
-    # FRAGMENT CENTRAL DE OPERACIONES (CATÁLOGO / CARRITO / HISTORIAL)
+    # FRAGMENT CENTRAL
     # ──────────────────────────────────────────────────────────────────────────
     @st.fragment
     def render_pedido():
@@ -385,10 +345,8 @@ else:
         label_c   = f"🛒 Carrito ({total_uds})" if total_uds > 0 else "🛒 Carrito"
         opciones  = ["📦 Catálogo", label_c, "📋 Mis Pedidos"]
 
-        # Control del sistema de pestañas móvil-friendly mediante radio button
         tab_sel = st.radio(
-            "tabs_nav",
-            opciones,
+            "tabs_nav", opciones,
             index=int(st.session_state.tab_idx),
             horizontal=True,
             label_visibility="collapsed",
@@ -397,7 +355,7 @@ else:
         st.session_state.tab_idx = opciones.index(tab_sel)
 
         # ══════════════════════════════════════════════════════════════════════
-        # TAB 0 — CATÁLOGO DE PRODUCTOS EN PROMOCIÓN
+        # TAB 0 — CATÁLOGO
         # ══════════════════════════════════════════════════════════════════════
         if st.session_state.tab_idx == 0:
             st.markdown('<div class="section-title">📦 Productos en Promoción</div>', unsafe_allow_html=True)
@@ -409,7 +367,7 @@ else:
             )
 
             if filtro:
-                expr    = str(filtro).strip()
+                expr = str(filtro).strip()
                 mascara = (
                     df_inv[COL_NOMBRE].astype(str).str.contains(expr, case=False, na=False) |
                     df_inv[COL_CODIGO].astype(str).str.strip().str.contains(expr, case=False, na=False)
@@ -419,7 +377,7 @@ else:
                 df_vista = df_inv.head(6)
 
             if df_vista.empty:
-                st.info("🔍 Ningún artículo coincide con los criterios de búsqueda introducidos.")
+                st.info("🔍 Ningún artículo coincide con los criterios introducidos.")
             else:
                 st.caption(f"Visualizando {len(df_vista)} ítems disponibles.")
 
@@ -438,10 +396,9 @@ else:
                             nombre = str(reg[COL_NOMBRE]).strip()
                             imagen = reg[COL_IMAGEN] if COL_IMAGEN and pd.notna(reg[COL_IMAGEN]) else ""
                         except Exception as e:
-                            st.caption(f"⚠️ Error renderizando fila {idx}: {e}")
+                            st.caption(f"⚠️ Error fila {idx}: {e}")
                             continue
 
-                        # Lógica visual dinámica para Badges de inventario
                         if stock <= 0:
                             badge     = '<span class="stock-out">❌ Agotado</span>'
                             bloqueado = True
@@ -463,67 +420,62 @@ else:
                                     cant = st.number_input(
                                         "Cant", min_value=1, max_value=max(stock, 1),
                                         value=1, step=1,
-                                        key=f"qty_{codigo}", label_visibility="collapsed"
+                                        key=f"qty_{codigo}",
+                                        label_visibility="collapsed"
                                     )
-                                    with c_btn:
-                                                                        if st.button("➕ Solicitar", key=f"add_{codigo}", use_container_width=True):
-                                                                            # ── VALIDACIÓN LOGÍSTICA: Verificar si el ítem ya existe en el carrito ──
-                                                                            item_existente = None
-                                                                            for item in st.session_state.carrito:
-                                                                                if item["codigo_producto"] == codigo:
-                                                                                    item_existente = item
-                                                                                    break
-                                                                            
-                                                                            if item_existente:
-                                                                                # Si ya existía, acumulamos la cantidad cuidando no superar el stock real
-                                                                                nueva_cantidad_acumulada = item_existente["cantidad"] + int(cant)
-                                                                                if nueva_cantidad_acumulada > stock:
-                                                                                    nueva_cantidad_acumulada = stock
-                                                                                    st.toast(f"⚠️ Cantidad ajustada al stock máximo disponible ({stock} ud.)", icon="💡")
-                                                                                
-                                                                                item_existente["cantidad"] = nueva_cantidad_acumulada
-                                                                                item_existente["subtotal"] = nueva_cantidad_acumulada * precio
-                                                                            else:
-                                                                                # Si es un producto nuevo en el carrito, lo agregamos normalmente
-                                                                                st.session_state.carrito.append({
-                                                                                    "codigo_producto": codigo,
-                                                                                    "producto":        nombre,
-                                                                                    "cantidad":        int(cant),
-                                                                                    "precio_unitario": precio,
-                                                                                    "subtotal":        precio * int(cant),
-                                                                                })
-                                                                            
-                                                                            st.session_state.tab_idx = 0
-                                                                            st.rerun(scope="fragment")
+                                # ── FIX: c_btn al mismo nivel que c_num ───────
+                                with c_btn:
+                                    if st.button("➕ Solicitar", key=f"add_{codigo}", use_container_width=True):
+                                        # Acumular si el producto ya está en el carrito
+                                        item_existente = next(
+                                            (i for i in st.session_state.carrito if i["codigo_producto"] == codigo),
+                                            None
+                                        )
+                                        if item_existente:
+                                            nueva_cant = min(item_existente["cantidad"] + int(cant), stock)
+                                            if nueva_cant != item_existente["cantidad"] + int(cant):
+                                                st.toast(f"⚠️ Ajustado al stock máximo ({stock} ud.)", icon="💡")
+                                            item_existente["cantidad"] = nueva_cant
+                                            item_existente["subtotal"] = nueva_cant * precio
+                                        else:
+                                            st.session_state.carrito.append({
+                                                "codigo_producto": codigo,
+                                                "producto":        nombre,
+                                                "cantidad":        int(cant),
+                                                "precio_unitario": precio,
+                                                "subtotal":        precio * int(cant),
+                                            })
+                                        st.session_state.tab_idx = 0
+                                        st.rerun(scope="fragment")
                             else:
                                 st.button("🚫 No Disponible", key=f"dis_{codigo}",
                                           disabled=True, use_container_width=True)
                             st.markdown("<br>", unsafe_allow_html=True)
 
         # ══════════════════════════════════════════════════════════════════════
-        # TAB 1 — CARRITO DE COMPRAS CON ADAPTACIÓN DE STOCK EN CALIENTE
+        # TAB 1 — CARRITO
         # ══════════════════════════════════════════════════════════════════════
         elif st.session_state.tab_idx == 1:
             st.markdown('<div class="section-title">🛒 Carrito de Compras</div>', unsafe_allow_html=True)
 
             if not st.session_state.carrito:
-                st.info("Tu carrito está vacío. Agrega productos desde el Catálogo principal.")
+                st.info("Tu carrito está vacío. Agrega productos desde el Catálogo.")
             else:
                 from src.componentes import render_estructura_item_carrito
                 st.markdown('<div class="contenedor-carrito">', unsafe_allow_html=True)
 
                 for pos, item in enumerate(st.session_state.carrito):
-                    datos   = indice_productos.get(item['producto'])
-                    s_max   = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
-                    foto    = datos[COL_IMAGEN] if datos is not None and COL_IMAGEN and COL_IMAGEN in datos else ""
+                    datos = indice_productos.get(item['producto'])
+                    s_max = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
+                    foto  = datos[COL_IMAGEN] if datos is not None and COL_IMAGEN and COL_IMAGEN in datos else ""
 
-                    # Adaptación de control de concurrencia visual in-situ
+                    # Ajuste automático si el stock bajó desde que se agregó al carrito
                     cantidad_guardada = int(item['cantidad'])
                     if cantidad_guardada > s_max:
                         cantidad_guardada = max(1, s_max)
                         st.session_state.carrito[pos]['cantidad'] = cantidad_guardada
                         st.session_state.carrito[pos]['subtotal'] = cantidad_guardada * item['precio_unitario']
-                        st.warning(f"⚠️ El stock de **{item['producto']}** disminuyó en la base de datos central. Se reajustó automáticamente al máximo disponible actual ({s_max} ud.).")
+                        st.warning(f"⚠️ Stock de **{item['producto']}** reajustado al máximo disponible ({s_max} ud.).")
 
                     c_info, c_cant, c_del = st.columns([2.5, 1.2, 0.4])
 
@@ -545,14 +497,14 @@ else:
                         if int(nueva_cant) != int(item['cantidad']):
                             st.session_state.carrito[pos]['cantidad'] = int(nueva_cant)
                             st.session_state.carrito[pos]['subtotal'] = int(nueva_cant) * item['precio_unitario']
-                            st.session_state.tab_idx = 1
+                            st.session_state.tab_idx = 1   # quedarse en carrito
                             st.rerun(scope="fragment")
 
                     with c_del:
                         st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
-                        if st.button("🗑️", key=f"del_{pos}", help="Eliminar ítem del carrito"):
+                        if st.button("🗑️", key=f"del_{pos}", help="Eliminar ítem"):
                             st.session_state.carrito.pop(pos)
-                            st.session_state.tab_idx = 1
+                            st.session_state.tab_idx = 1   # quedarse en carrito
                             st.rerun(scope="fragment")
 
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -566,7 +518,7 @@ else:
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Compilación de la estructura para el envío masivo
+                # Compilar items para el envío
                 lista_envio = []
                 for item in st.session_state.carrito:
                     fila = indice_productos.get(item['producto'])
@@ -583,14 +535,12 @@ else:
                         "empresa":         st.session_state.empresa or str(fila[COL_EMP])
                     })
 
-                # Botón de Procesamiento de Pedido
-                if st.button("REALIZAR PEDIDO", type="primary", use_container_width=True, key="btn_enviar"):
+                if st.button("REALIZAR PEDIDO", type="primary",
+                             use_container_width=True, key="btn_enviar"):
                     if lista_envio:
-                        exito = ejecutar_envio_transaccional(lista_envio)
-                        if exito:
-                            st.rerun()
+                        ejecutar_envio_transaccional(lista_envio)
 
-                # ── ALERTA DE STOCK REDISEÑADA Y POSICIONADA ABAJO DEL BOTÓN ──
+                # Alerta de colisión de stock (se muestra después del botón)
                 if "lista_productos_colision" in st.session_state:
                     st.markdown(f"""
                     <div class="alerta-stock-container">
@@ -601,19 +551,19 @@ else:
                             {st.session_state["lista_productos_colision"]}
                         </ul>
                         <div class="alerta-stock-sugerencia">
-                            💡 <b>Sugerencia:</b> Por favor, reduce la cantidad en el selector o remueve el producto agotado para poder procesar el resto de tus artículos.
+                            💡 <b>Sugerencia:</b> Reduce la cantidad o elimina el producto agotado para procesar el resto.
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
 
         # ══════════════════════════════════════════════════════════════════════
-        # TAB 2 — HISTORIAL DE COMPRAS REGISTRADAS
+        # TAB 2 — HISTORIAL
         # ══════════════════════════════════════════════════════════════════════
         elif st.session_state.tab_idx == 2:
             st.markdown('<div class="section-title">📋 Registro Histórico de Compras</div>', unsafe_allow_html=True)
             df_hist = cargar_historial(st.session_state.cod_emp)
             if df_hist is not None and not df_hist.empty:
-                st.caption("Últimos artículos solicitados (Ordenados de forma cronológica descendente):")
+                st.caption("Últimos artículos solicitados (orden cronológico descendente):")
                 for _, p in df_hist.tail(10).iloc[::-1].iterrows():
                     st.markdown(
                         f"📦 **{p.get('Nombre Producto','N/A')}**<br>"
@@ -624,18 +574,15 @@ else:
                     st.markdown("<hr style='margin:0.4rem 0;border-style:dashed;border-color:#E0E0E0;'>",
                                 unsafe_allow_html=True)
             else:
-                st.info("No se registran transacciones previas vinculadas a su cuenta corporativa.")
+                st.info("No se registran transacciones previas en su cuenta.")
 
-    # Renderizar el entorno reactivo
     render_pedido()
 
-    # ── CIERRE DE SESIÓN SEGURO ──
+    # ── CERRAR SESIÓN ─────────────────────────────────────────────────────────
     st.markdown("<br><br>", unsafe_allow_html=True)
     if st.button("🚪 Cerrar Sesión", use_container_width=True):
         for k in ['logged_in','cod_emp','nom_emp','empresa','regional','carrito','tab_idx']:
             st.session_state[k] = False if k == 'logged_in' else ([] if k == 'carrito' else (0 if k == 'tab_idx' else None))
-        if "lista_productos_colision" in st.session_state:
-            del st.session_state["lista_productos_colision"]
-        if "lanzar_toast_exito" in st.session_state:
-            del st.session_state["lanzar_toast_exito"]
+        for extra in ["lista_productos_colision", "lanzar_toast_exito"]:
+            st.session_state.pop(extra, None)
         st.rerun()
