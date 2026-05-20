@@ -1,11 +1,22 @@
 # -*- coding: utf-8 -*-
+"""
+MÓDULO DE INTERFAZ DE USUARIO Y GESTIÓN DE PEDIDOS - OUTLET PROESA
+----------------------------------------------------------------
+Controla el flujo de login de empleados, despliegue del catálogo de productos,
+gestión dinámica del carrito de compras con control de concurrencia in situ,
+y persistencia segura y atómica de pedidos en Google Sheets.
+
+Desarrollado para: PROYECTO_OUTLET
+Última actualización: Mayo 2026
+"""
+
 import streamlit as st
 import pandas as pd
 import base64
 from datetime import datetime
 
 # ==============================================================================
-# 1. CONFIGURACIÓN
+# 1. CONFIGURACIÓN EXTERNA DE HOJAS DE CÁLCULO
 # ==============================================================================
 try:
     from config import (
@@ -13,7 +24,7 @@ try:
         PEDIDOS_SHEET_URL,    PEDIDOS_HOJA_NAME
     )
 except ImportError:
-    st.error("❌ Archivo `config.py` no encontrado.")
+    st.error("❌ Archivo `config.py` no encontrado en la raíz del proyecto.")
     st.stop()
 
 try:
@@ -21,16 +32,17 @@ try:
         obtener_inventario_sheets,
         obtener_pedidos_empleado_sheets,
         guardar_pedido_sheets,
-        procesar_descuento_stock_seguro,  # <-- CAMBIO: Importamos la nueva función segura
+        procesar_descuento_stock_seguro,
         verificar_stock_disponible,
     )
     from src.database import obtener_datos_empleado, validar_empleado
     from src.componentes import cargar_estilos_css, render_tarjeta_producto
 except ImportError as e:
-    st.error("❌ Error cargando módulos de `src/`.")
+    st.error("❌ Error cargando los módulos esenciales desde el directorio `src/`.")
     st.code(str(e))
     st.stop()
 
+# Configuración de página nativa de Streamlit
 try:
     st.set_page_config(
         page_title="Mi Pedido - Outlet PROESA",
@@ -41,12 +53,13 @@ try:
 except Exception:
     pass
 
+# Aplicación de la hoja de estilos global del proyecto
 try:
     cargar_estilos_css()
 except Exception as e:
-    st.warning(f"⚠️ Estilos no aplicados: {e}")
+    st.warning(f"⚠️ Estilos CSS base no aplicados: {e}")
 
-# CSS extra: tabs via radio button (igual visual que st.tabs, funciona en mobile)
+# Inyección de estilos CSS extras para emular pestañas nativas usando st.radio horizontal
 st.markdown("""
 <style>
 /* ── Hacer que st.radio horizontal parezca exactamente st.tabs ── */
@@ -74,62 +87,76 @@ div[data-testid="stRadio"] label {
     transition: color 0.15s;
 }
 div[data-testid="stRadio"] label:hover { color: #1A1A2E !important; }
-/* Pestaña activa */
+
+/* Configuración del estado activo de la pestaña */
 div[data-testid="stRadio"] label[data-checked="true"] {
     color: #1A1A2E !important;
     font-weight: 600 !important;
     border-bottom: 3px solid #E63946 !important;
 }
-/* Ocultar círculo del radio */
+
+/* Ocultación de los elementos de radio nativos del navegador */
 div[data-testid="stRadio"] [data-testid="stWidgetLabel"] { display: none !important; }
 div[data-testid="stRadio"] span[data-testid="stMarkdownContainer"] p { margin: 0; }
 div[data-testid="stRadio"] div[data-baseweb="radio"] > div:first-child { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
+
 # ==============================================================================
-# 2. LOGO
+# 2. PROCESAMIENTO MULTIMEDIA (LOGO EMPRESARIAL)
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def get_logo_b64(path="assets/logo_proesa.png"):
+    """Codifica la imagen del logo local a Base64 para inyección HTML segura."""
     try:
         with open(path, "rb") as f:
             return base64.b64encode(f.read()).decode()
     except Exception:
         return None
 
+
 # ==============================================================================
-# 3. SESSION STATE
+# 3. INICIALIZACIÓN DEL SESSION STATE DEL USUARIO
 # ==============================================================================
 defaults = {
-    'logged_in': False, 'cod_emp': None, 'nom_emp': None,
-    'empresa': None,    'regional': None, 'carrito': [],
-    'tab_idx': 0,       # 0=Catálogo  1=Carrito  2=Historial
+    'logged_in': False, 
+    'cod_emp': None, 
+    'nom_emp': None,
+    'empresa': None,    
+    'regional': None, 
+    'carrito': [],
+    'tab_idx': 0,       # Índices: 0 = Catálogo, 1 = Carrito, 2 = Historial
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
+
 # ==============================================================================
-# 4. PARSEO ROBUSTO (numericise_ignore=['all'] → todo llega como string)
+# 4. FUNCIONES DE PARSEO ROBUSTO (Compatibilidad estricta con Sheets stringified)
 # ==============================================================================
 def _parse_stock(v) -> int:
+    """Parsea de forma segura valores de stock evitando rupturas por comas o flotantes."""
     try:
         return max(0, int(float(str(v).strip().replace(',', ''))))
     except Exception:
         return 0
 
 def _parse_precio(v) -> float:
+    """Parsea de forma segura valores monetarios de productos."""
     try:
         return float(str(v).strip().replace(',', '.'))
     except Exception:
         return 0.0
 
+
 # ==============================================================================
-# 5. INVENTARIO E ÍNDICE
+# 5. CARGA DE DATOS CENTRALIZADA E INDEXACIÓN
 # ==============================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def cargar_inventario():
+    """Descarga de forma segura el DataFrame de inventario actual desde la API."""
     try:
         df = obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
         return df if df is not None and not df.empty else pd.DataFrame()
@@ -139,17 +166,21 @@ def cargar_inventario():
 
 @st.cache_data(show_spinner=False)
 def construir_indice(shape_key):
+    """Construye un mapa de búsqueda en memoria basado en el Nombre del Producto."""
     col = "Nombre Producto" if "Nombre Producto" in df_inv.columns else df_inv.columns[2]
     return {str(r[col]).strip(): r for _, r in df_inv.iterrows() if pd.notna(r[col])}
 
+
+# Ejecución de la carga de datos inicial
 df_inv = cargar_inventario()
 if df_inv.empty:
-    st.error("❌ Catálogo no disponible. Verifica la conexión o config.py.")
+    st.error("❌ Catálogo de inventario no disponible. Revisa la conectividad de red o config.py.")
     st.stop()
 
+# Generación del índice rápido de consulta
 indice_productos = construir_indice(str(df_inv.shape))
 
-# Nombres de columnas
+# Mapeo dinámico y posicional de columnas del inventario
 COL_NOMBRE = "Nombre Producto" if "Nombre Producto" in df_inv.columns else df_inv.columns[2]
 COL_CODIGO = "Código Producto" if "Código Producto" in df_inv.columns else df_inv.columns[1]
 COL_STOCK  = "Stock"           if "Stock"           in df_inv.columns else df_inv.columns[3]
@@ -160,11 +191,10 @@ COL_IMAGEN = "Imagen"          if "Imagen"          in df_inv.columns else None
 
 
 # ==============================================================================
-# PANTALLA 1: LOGIN
+# PANTALLA 1: PORTAL DE ACCESO Y LOGIN DE EMPLEADOS
 # ==============================================================================
 if not st.session_state.logged_in:
     logo = get_logo_b64()
-    
     html_logo = f'<img src="data:image/png;base64,{logo}" style="height:210px;width:auto;object-fit:contain;margin-top:-20px;">' if logo else ''
     
     st.markdown(f"""
@@ -179,13 +209,13 @@ if not st.session_state.logged_in:
         st.subheader("🔑 Acceso al Sistema")
         cod = st.text_input(
             "Código de Empleado", placeholder="Ej: E0200491",
-            help="Consulte con su supervisor si desconoce su código."
+            help="Consulte con su supervisor asignado si desconoce su código corporativo o de planilla."
         ).upper().strip()
         st.markdown("<br>", unsafe_allow_html=True)
 
         if st.form_submit_button("🚀 Validar Credenciales", use_container_width=True):
             if cod:
-                with st.spinner("Consultando registros..."):
+                with st.spinner("Consultando registros de personal..."):
                     try:
                         datos = obtener_datos_empleado(cod)
                         if datos and datos.get('encontrado'):
@@ -197,19 +227,18 @@ if not st.session_state.logged_in:
                             st.success("✅ Acceso autorizado.")
                             st.rerun()
                         else:
-                            st.error(f"❌ Código '{cod}' no registrado.")
+                            st.error(f"❌ Código '{cod}' no registrado en la base de datos de la empresa.")
                     except Exception as e:
                         st.error(f"Error en verificación: {e}")
             else:
-                st.error("⚠️ Ingresa tu código de empleado.")
+                st.error("⚠️ Por favor, ingresa tu código de empleado para continuar.")
 
 
 # ==============================================================================
-# PANTALLA 2: PEDIDOS
+# PANTALLA 2: ENTORNO PRINCIPAL DE PEDIDOS DE COMPRA
 # ==============================================================================
 else:
     logo = get_logo_b64()
-    
     html_header_media = f'<img src="data:image/png;base64,{logo}" style="height:100px;object-fit:contain;">' if logo else "🛒"
     
     st.markdown(f"""
@@ -224,14 +253,22 @@ else:
 
     @st.cache_data(ttl=120, show_spinner=False)
     def cargar_historial(cod):
+        """Carga el historial de compras del empleado directamente desde Sheets."""
         try:
             df = obtener_pedidos_empleado_sheets(cod, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME)
             return df if df is not None else pd.DataFrame()
         except Exception:
             return pd.DataFrame()
 
-    # ── FUNCIÓN DE ENVÍO PREPARADA A NIVEL GLOBAL (EVITA SYNTAXERROR Y CONTROL DE CONCURRENCIA) ──
+    # ── FUNCIÓN TRANSACCIONAL DE NIVEL GLOBAL (PREVIENE COMPLETAMENTE SYNTAXERROR Y DUPLICACIONES) ──
     def ejecutar_envio_transaccional(items):
+        """
+        Envía de forma segura el lote del pedido a procesar.
+        Maneja bloqueos lógicos de concurrencia y despliega mensajes claros si falla.
+        """
+        if "mensaje_colision" in st.session_state:
+            del st.session_state["mensaje_colision"]
+
         with st.status("Procesando tu pedido...", expanded=True) as estado:
             try:
                 st.write("🔍 Verificando disponibilidad y reservando stock en tiempo real...")
@@ -243,14 +280,20 @@ else:
                     hoja=INVENTARIO_HOJA_NAME
                 )
                 
+                # CONTROL DE FRACASO: Concurrencia detectada, otra persona ganó las unidades antes
                 if not transaccion["exito"]:
-                    estado.update(label="⚠️ Conflicto de stock detectado.", state="error")
+                    estado.update(label="⚠️ Pedido rechazado por falta de stock.", state="error")
+                    
+                    detalles = []
                     for p in transaccion["sin_stock"]:
-                        st.error(
-                            f"❌ **{p['producto']}** — Solicitaste {p['pedido']} ud. pero ya no hay disponibilidad suficiente (Quedan: {p['disponible']} ud.)."
+                        detalles.append(
+                            f"• **{p['producto']}**: Solicitaste {p['pedido']} ud., pero otra persona finalizó su pedido un instante antes y agotó el stock disponible (Stock actual en sistema: {p['disponible']} ud.)."
                         )
+                    
+                    st.session_state["mensaje_colision"] = "\n".join(detalles)
                     return False
 
+                # CONTROL DE ÉXITO: El stock ya está apartado en la nube, escribimos el log de auditoría
                 st.write("📝 Guardando el registro oficial del pedido...")
                 ok = guardar_pedido_sheets(
                     st.session_state.cod_emp, st.session_state.nom_emp,
@@ -271,12 +314,12 @@ else:
 
             except Exception as e:
                 estado.update(label="❌ Error inesperado.", state="error")
-                st.error(f"Detalle: {e}")
+                st.error(f"Detalle de excepción: {e}")
                 return False
 
 
     # ──────────────────────────────────────────────────────────────────────────
-    # FRAGMENT principal de renderizado
+    # FRAGMENT CENTRAL DE OPERACIONES (CATÁLOGO / CARRITO / HISTORIAL)
     # ──────────────────────────────────────────────────────────────────────────
     @st.fragment
     def render_pedido():
@@ -284,6 +327,7 @@ else:
         label_c   = f"🛒 Carrito ({total_uds})" if total_uds > 0 else "🛒 Carrito"
         opciones  = ["📦 Catálogo", label_c, "📋 Mis Pedidos"]
 
+        # Control del sistema de pestañas móvil-friendly mediante radio button
         tab_sel = st.radio(
             "tabs_nav",
             opciones,
@@ -295,7 +339,7 @@ else:
         st.session_state.tab_idx = opciones.index(tab_sel)
 
         # ══════════════════════════════════════════════════════════════════════
-        # TAB 0 — CATÁLOGO
+        # TAB 0 — CATÁLOGO DE PRODUCTOS EN PROMOCIÓN
         # ══════════════════════════════════════════════════════════════════════
         if st.session_state.tab_idx == 0:
             st.markdown('<div class="section-title">📦 Productos en Promoción</div>', unsafe_allow_html=True)
@@ -317,7 +361,7 @@ else:
                 df_vista = df_inv.head(6)
 
             if df_vista.empty:
-                st.info("🔍 Ningún artículo coincide con los criterios.")
+                st.info("🔍 Ningún artículo coincide con los criterios de búsqueda introducidos.")
             else:
                 st.caption(f"Visualizando {len(df_vista)} ítems disponibles.")
 
@@ -336,9 +380,10 @@ else:
                             nombre = str(reg[COL_NOMBRE]).strip()
                             imagen = reg[COL_IMAGEN] if COL_IMAGEN and pd.notna(reg[COL_IMAGEN]) else ""
                         except Exception as e:
-                            st.caption(f"⚠️ Error fila {idx}: {e}")
+                            st.caption(f"⚠️ Error renderizando fila {idx}: {e}")
                             continue
 
+                        # Lógica visual dinámica para Badges de inventario
                         if stock <= 0:
                             badge     = '<span class="stock-out">❌ Agotado</span>'
                             bloqueado = True
@@ -379,13 +424,13 @@ else:
                             st.markdown("<br>", unsafe_allow_html=True)
 
         # ══════════════════════════════════════════════════════════════════════
-        # TAB 1 — CARRITO
+        # TAB 1 — CARRITO DE COMPRAS CON ADAPTACIÓN DE STOCK EN CALIENTE
         # ══════════════════════════════════════════════════════════════════════
         elif st.session_state.tab_idx == 1:
             st.markdown('<div class="section-title">🛒 Carrito de Compras</div>', unsafe_allow_html=True)
 
             if not st.session_state.carrito:
-                st.info("Tu carrito está vacío. Agrega productos desde el Catálogo.")
+                st.info("Tu carrito está vacío. Agrega productos desde el Catálogo principal.")
             else:
                 from src.componentes import render_estructura_item_carrito
                 st.markdown('<div class="contenedor-carrito">', unsafe_allow_html=True)
@@ -395,13 +440,13 @@ else:
                     s_max   = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
                     foto    = datos[COL_IMAGEN] if datos is not None and COL_IMAGEN and COL_IMAGEN in datos else ""
 
-                    # Control de concurrencia visual dinámico
+                    # ── ADAPTACIÓN DE CONTROL DE CONCURRENCIA VISUAL (PREVIENE EL STREAMLITVALUEABOVEMAXERROR) ──
                     cantidad_guardada = int(item['cantidad'])
                     if cantidad_guardada > s_max:
                         cantidad_guardada = max(1, s_max)
                         st.session_state.carrito[pos]['cantidad'] = cantidad_guardada
                         st.session_state.carrito[pos]['subtotal'] = cantidad_guardada * item['precio_unitario']
-                        st.warning(f"⚠️ El stock de **{item['producto']}** disminuyó. Se ajustó al máximo disponible ({s_max} ud.).")
+                        st.warning(f"⚠️ El stock de **{item['producto']}** disminuyó en la base de datos central. Se reajustó automáticamente al máximo disponible actual ({s_max} ud.).")
 
                     c_info, c_cant, c_del = st.columns([2.5, 1.2, 0.4])
 
@@ -428,7 +473,7 @@ else:
 
                     with c_del:
                         st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
-                        if st.button("🗑️", key=f"del_{pos}", help="Eliminar"):
+                        if st.button("🗑️", key=f"del_{pos}", help="Eliminar ítem del carrito"):
                             st.session_state.carrito.pop(pos)
                             st.session_state.tab_idx = 1
                             st.rerun(scope="fragment")
@@ -444,7 +489,7 @@ else:
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Creamos la lista estructurada de items a enviar
+                # Compilación y estructuración del objeto JSON/Diccionario para el envío masivo
                 lista_envio = []
                 for item in st.session_state.carrito:
                     fila = indice_productos.get(item['producto'])
@@ -461,6 +506,13 @@ else:
                         "empresa":         st.session_state.empresa or str(fila[COL_EMP])
                     })
 
+                # DESPLIEGUE EXPLICÍTOL DE ALERTA ROJA EN CASO DE COLISIÓN DE COMPRA SIMULTÁNEA
+                if "mensaje_colision" in st.session_state:
+                    st.error("### 🚫 No se pudo enviar tu pedido por falta de existencias")
+                    st.markdown(st.session_state["mensaje_colision"])
+                    st.info("💡 Sugerencia: Reduce la cantidad en los selectores del carrito o remueve el producto agotado para liberar y procesar los demás artículos.")
+                    st.markdown("<br>", unsafe_allow_html=True)
+
                 if st.button("REALIZAR PEDIDO", type="primary", use_container_width=True, key="btn_enviar"):
                     if lista_envio:
                         exito = ejecutar_envio_transaccional(lista_envio)
@@ -468,13 +520,13 @@ else:
                             st.rerun()
 
         # ══════════════════════════════════════════════════════════════════════
-        # TAB 2 — HISTORIAL
+        # TAB 2 — HISTORIAL DE COMPRAS REGISTRADAS
         # ══════════════════════════════════════════════════════════════════════
         elif st.session_state.tab_idx == 2:
             st.markdown('<div class="section-title">📋 Registro Histórico de Compras</div>', unsafe_allow_html=True)
             df_hist = cargar_historial(st.session_state.cod_emp)
             if df_hist is not None and not df_hist.empty:
-                st.caption("Últimos artículos solicitados (orden cronológico descendente):")
+                st.caption("Últimos artículos solicitados (Ordenados de forma cronológica descendente):")
                 for _, p in df_hist.tail(10).iloc[::-1].iterrows():
                     st.markdown(
                         f"📦 **{p.get('Nombre Producto','N/A')}**<br>"
@@ -485,13 +537,16 @@ else:
                     st.markdown("<hr style='margin:0.4rem 0;border-style:dashed;border-color:#E0E0E0;'>",
                                 unsafe_allow_html=True)
             else:
-                st.info("No se registran transacciones previas en su cuenta.")
+                st.info("No se registran transacciones previas vinculadas a su cuenta corporativa.")
 
+    # Renderizar el entorno reactivo
     render_pedido()
 
-    # ── Cerrar sesión ─────────────────────────────────────────────────────────
+    # ── CIERRE DE SESIÓN SEGURO DE OPERARIOS ──
     st.markdown("<br><br>", unsafe_allow_html=True)
     if st.button("🚪 Cerrar Sesión", use_container_width=True):
         for k in ['logged_in','cod_emp','nom_emp','empresa','regional','carrito','tab_idx']:
             st.session_state[k] = False if k == 'logged_in' else ([] if k == 'carrito' else (0 if k == 'tab_idx' else None))
+        if "mensaje_colision" in st.session_state:
+            del st.session_state["mensaje_colision"]
         st.rerun()
