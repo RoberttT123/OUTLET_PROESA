@@ -1,4 +1,14 @@
 # -*- coding: utf-8 -*-
+"""
+MÓDULO DE CONECTIVIDAD Y PERSISTENCIA CON GOOGLE SHEETS - OUTLET PROESA
+----------------------------------------------------------------
+Centraliza todas las operaciones de lectura, escritura y transacciones
+atómicas con la API de Google Drive/Sheets a través de gspread.
+
+Desarrollado para: PROYECTO_OUTLET
+Última actualización: Mayo 2026
+"""
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -14,7 +24,7 @@ except ImportError:
 
 
 def get_gsheet_connection():
-    """Obtiene la conexión a Google Sheets."""
+    """Obtiene la conexión a Google Sheets mediante credenciales locales o secrets."""
     try:
         if HAS_GSPREAD:
             scope = [
@@ -42,7 +52,13 @@ def get_gsheet_connection():
 
 
 def obtener_inventario_sheets(url_sheet: str, hoja: str = "Inventario"):
-    """Carga el inventario desde Google Sheets preservando ceros iniciales."""
+    """
+    Carga el inventario desde Google Sheets.
+    
+    numericise_ignore=['all'] evita que gspread convierta automáticamente
+    "0100221" al número 100221 — preserva el cero inicial en códigos
+    que son puramente numéricos.
+    """
     try:
         gc = get_gsheet_connection()
         if gc is None:
@@ -52,9 +68,11 @@ def obtener_inventario_sheets(url_sheet: str, hoja: str = "Inventario"):
         spreadsheet = gc.open_by_url(url_sheet)
         worksheet = spreadsheet.worksheet(hoja)
 
+        # ── FIX: preservar ceros iniciales en códigos numéricos ──────────────
         data = worksheet.get_all_records(numericise_ignore=['all'])
         df = pd.DataFrame(data)
 
+        # Forzar columna de código a string limpio (por si queda algún residuo)
         if "Código Producto" in df.columns:
             df["Código Producto"] = df["Código Producto"].astype(str).str.strip()
 
@@ -73,7 +91,7 @@ def guardar_pedido_sheets(
     hoja: str = "Pedidos",
     timestamp: str = None
 ):
-    """Guarda un pedido en Google Sheets con hora de Bolivia."""
+    """Guarda un pedido en Google Sheets con hora oficial de Bolivia."""
     if timestamp is None:
         tz_bo = pytz.timezone('America/La_Paz')
         timestamp = datetime.now(tz_bo).strftime("%d/%m/%Y %H:%M:%S")
@@ -117,7 +135,7 @@ def obtener_pedidos_empleado_sheets(
     url_sheet: str,
     hoja: str = "Pedidos"
 ) -> pd.DataFrame:
-    """Obtiene todos los pedidos de un empleado."""
+    """Obtiene todos los pedidos de un empleado específico."""
     try:
         gc = get_gsheet_connection()
         if gc is None:
@@ -140,7 +158,7 @@ def obtener_todos_pedidos_sheets(
     url_sheet: str,
     hoja: str = "Pedidos"
 ) -> pd.DataFrame:
-    """Obtiene todos los pedidos."""
+    """Obtiene el historial absoluto de todos los pedidos registrados."""
     try:
         gc = get_gsheet_connection()
         if gc is None:
@@ -160,7 +178,12 @@ def verificar_stock_disponible(
     url_sheet: str,
     hoja: str = "Inventario"
 ) -> list:
-    """Verifica en tiempo real si hay stock suficiente para cada producto."""
+    """
+    Verifica en tiempo real si hay stock suficiente para cada producto.
+    Retorna lista de productos con stock insuficiente:
+        [{"producto": "...", "pedido": 5, "disponible": 2}, ...]
+    Si retorna lista vacía, todos los productos tienen stock suficiente.
+    """
     try:
         gc = get_gsheet_connection()
         if gc is None:
@@ -169,6 +192,7 @@ def verificar_stock_disponible(
         spreadsheet = gc.open_by_url(url_sheet)
         worksheet = spreadsheet.worksheet(hoja)
 
+        # Una sola lectura fresca — no usa caché
         data = worksheet.get_all_values()
         if not data or len(data) < 2:
             return []
@@ -177,6 +201,7 @@ def verificar_stock_disponible(
         COL_STOCK_IDX  = 3
         COL_NOMBRE_IDX = 2
 
+        # Mapa código → stock real actual en Sheets
         mapa_stock_real = {}
         for row in data[1:]:
             if len(row) > COL_CODIGO_IDX:
@@ -188,6 +213,7 @@ def verificar_stock_disponible(
                     stock = 0
                 mapa_stock_real[codigo] = {"stock": stock, "nombre": nombre}
 
+        # Comparar lo pedido contra el stock real
         sin_stock = []
         for item in items:
             codigo  = str(item["codigo_producto"]).strip()
@@ -212,20 +238,21 @@ def verificar_stock_disponible(
         return []
 
 
-# ── NUEVA FUNCIÓN TRANSACCIONAL CRÍTICA ANTIMULTIUSER COLLISION ────────────────
+# ── NUEVA FUNCIÓN TRANSACCIONAL ATÓMICA (ANTI-CONCURRENCIA) ────────────────────
 def procesar_descuento_stock_seguro(
     items: list,
     url_sheet: str,
     hoja: str = "Inventario"
 ) -> dict:
     """
-    Fusión Atómica: Lee el stock real fresco, verifica la disponibilidad
-    y si TODO tiene stock, descuenta y escribe inmediatamente en un lote batch.
+    Fusión Atómica: Lee el stock real fresco, verifica la disponibilidad,
+    y si TODO el carrito tiene existencias, descuenta y escribe los cambios
+    inmediatamente en un solo lote batch de red (bloqueando lógicamente colisiones).
     
-    Retorna un diccionario:
+    Retorna un diccionario estructurado:
     {
-        "exito": True/False,
-        "sin_stock": [] # Lista con detalles si falló por falta de stock
+        "exito": True / False,
+        "sin_stock": [] # Contiene la lista detallada si falló por colisión
     }
     """
     try:
@@ -239,9 +266,9 @@ def procesar_descuento_stock_seguro(
         COL_CODIGO_IDX = 1
         COL_STOCK_IDX  = 3
         COL_NOMBRE_IDX = 2
-        COL_STOCK_NUM  = 4  # Columna 4 para objeto Cell (D)
+        COL_STOCK_NUM  = 4  # Columna 4 (D) para objeto Cell basado en 1
 
-        # 1. PASO CRÍTICO: Lectura instantánea en tiempo real de Sheets
+        # 1. PASO CRÍTICO: Descarga instantánea de la hoja en este preciso milisegundo
         data = worksheet.get_all_values()
         if not data or len(data) < 2:
             return {"exito": False, "sin_stock": []}
@@ -258,7 +285,7 @@ def procesar_descuento_stock_seguro(
                     stock = 0
                 mapa_actual[codigo] = {"fila": i, "stock": stock, "nombre": nombre}
 
-        # 2. VERIFICACIÓN IN SITU (Antes de proceder a escribir)
+        # 2. VERIFICACIÓN IN SITU (Antes de proceder a escribir o dar el OK)
         sin_stock = []
         celdas_a_actualizar = []
 
@@ -280,7 +307,7 @@ def procesar_descuento_stock_seguro(
                     "disponible": stock_real
                 })
             else:
-                # Si hay suficiente stock, preparamos la actualización del lote
+                # Si hay suficiente stock, preparamos la actualización de la celda
                 nuevo_stock = stock_real - pedido
                 celdas_a_actualizar.append(
                     Cell(row=mapa_actual[codigo]["fila"], col=COL_STOCK_NUM, value=nuevo_stock)
@@ -288,10 +315,10 @@ def procesar_descuento_stock_seguro(
 
         # 3. VEREDICTO TRANSACCIONAL
         if sin_stock:
-            # Si al menos un producto se quedó sin stock en este instante, abortamos toda la escritura
+            # Si al menos un producto se quedó sin stock debido a otro usuario, abortamos todo
             return {"exito": False, "sin_stock": sin_stock}
 
-        # Si todo está OK, se impacta la base de datos en lote inmediatamente
+        # Si todo el carrito superó la prueba con el stock fresco de este instante, guardamos en lote
         if celdas_a_actualizar:
             worksheet.update_cells(celdas_a_actualizar)
             return {"exito": True, "sin_stock": []}
@@ -299,19 +326,31 @@ def procesar_descuento_stock_seguro(
         return {"exito": False, "sin_stock": []}
 
     except Exception as e:
-        st.error(f"Error en transacción de stock: {e}")
+        st.error(f"Error crítico en la transacción de stock: {e}")
         return {"exito": False, "sin_stock": []}
 
 
-# Mantener por compatibilidad antigua si es necesario
-def actualizar_stock_sheets(codigo_producto: str, cantidad_a_restar: int, url_sheet: str, hoja: str = "Inventario"):
+def actualizar_stock_sheets(
+    codigo_producto: str,
+    cantidad_a_restar: int,
+    url_sheet: str,
+    hoja: str = "Inventario"
+):
+    """
+    Actualiza el stock de UN producto de manera aislada.
+    Se mantiene estrictamente por retrocompatibilidad con módulos antiguos.
+    """
     try:
         gc = get_gsheet_connection()
-        if gc is None: return False
+        if gc is None:
+            return False
+
         spreadsheet = gc.open_by_url(url_sheet)
         worksheet = spreadsheet.worksheet(hoja)
+
         lista_codigos = [str(c).strip() for c in worksheet.col_values(2)]
         codigo_buscar = str(codigo_producto).strip()
+
         if codigo_buscar in lista_codigos:
             row_idx = lista_codigos.index(codigo_buscar) + 1
             valor_celda = worksheet.cell(row_idx, 4).value
@@ -320,39 +359,71 @@ def actualizar_stock_sheets(codigo_producto: str, cantidad_a_restar: int, url_sh
             worksheet.update_cell(row_idx, 4, nuevo_stock)
             return True
         return False
-    except:
+    except Exception:
         return False
 
-def actualizar_stock_batch_sheets(items: list, url_sheet: str, hoja: str = "Inventario") -> bool:
+
+def actualizar_stock_batch_sheets(
+    items: list,
+    url_sheet: str,
+    hoja: str = "Inventario"
+) -> bool:
+    """Actualiza el stock de MÚLTIPLES productos de manera rápida en 2 llamadas HTTP."""
     try:
         gc = get_gsheet_connection()
-        if gc is None: return False
+        if gc is None:
+            return False
+
         spreadsheet = gc.open_by_url(url_sheet)
         worksheet = spreadsheet.worksheet(hoja)
+
         COL_CODIGO_IDX = 1
         COL_STOCK_IDX  = 3
         COL_STOCK_NUM  = 4
+
         data = worksheet.get_all_values()
-        if not data or len(data) < 2: return False
+        if not data or len(data) < 2:
+            return False
+
         mapa = {}
         for i, row in enumerate(data[1:], start=2):
             if len(row) > COL_CODIGO_IDX:
                 codigo = str(row[COL_CODIGO_IDX]).strip()
-                try: stock = int(float(row[COL_STOCK_IDX])) if len(row) > COL_STOCK_IDX and row[COL_STOCK_IDX] else 0
-                except: stock = 0
+                try:
+                    stock = int(float(row[COL_STOCK_IDX])) if len(row) > COL_STOCK_IDX and row[COL_STOCK_IDX] else 0
+                except (ValueError, TypeError):
+                    stock = 0
                 mapa[codigo] = {"fila": i, "stock": stock}
+
         celdas_a_actualizar = []
         for item in items:
             codigo = str(item["codigo_producto"]).strip()
             restar = int(item["cantidad_a_restar"])
-            if codigo not in mapa: continue
+
+            if codigo not in mapa:
+                continue
+
             nuevo_stock = max(0, mapa[codigo]["stock"] - restar)
-            celdas_a_actualizar.append(Cell(row=mapa[codigo]["fila"], col=COL_STOCK_NUM, value=nuevo_stock))
+            celdas_a_actualizar.append(
+                Cell(row=mapa[codigo]["fila"], col=COL_STOCK_NUM, value=nuevo_stock)
+            )
+
         if celdas_a_actualizar:
             worksheet.update_cells(celdas_a_actualizar)
         return True
-    except:
+
+    except Exception:
         return False
 
-INVENTARIO_HEADERS = ["Línea", "Código Producto", "Nombre Producto", "Stock", "Precio Unitario", "Empresa"]
-PEDIDOS_HEADERS = ["Cod. Empleado", "Nombre Empleado", "Línea", "Código Producto", "Nombre Producto", "Monto Uni", "Descuento", "Cantidad", "Stock Actual", "Empresa", "Fecha Registro"]
+
+# ── ESTRUCTURAS DE REFERENCIA DE FILAS (METADATA) ──────────────────────────────
+INVENTARIO_HEADERS = [
+    "Línea", "Código Producto", "Nombre Producto",
+    "Stock", "Precio Unitario", "Empresa"
+]
+
+PEDIDOS_HEADERS = [
+    "Cod. Empleado", "Nombre Empleado", "Línea",
+    "Código Producto", "Nombre Producto", "Monto Uni",
+    "Descuento", "Cantidad", "Stock Actual", "Empresa", "Fecha Registro"
+]
