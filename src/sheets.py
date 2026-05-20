@@ -41,7 +41,14 @@ def get_gsheet_connection():
 
 
 def obtener_inventario_sheets(url_sheet: str, hoja: str = "Inventario"):
-    """Carga el inventario desde Google Sheets."""
+    """
+    Carga el inventario desde Google Sheets.
+
+    numericise_ignore=['all'] evita que gspread convierta automáticamente
+    "0100221" al número 100221 — preserva el cero inicial en códigos
+    que son puramente numéricos. Los códigos con letras (ej: "010021pi")
+    ya llegaban bien; ahora los numéricos también.
+    """
     try:
         gc = get_gsheet_connection()
         if gc is None:
@@ -50,8 +57,16 @@ def obtener_inventario_sheets(url_sheet: str, hoja: str = "Inventario"):
 
         spreadsheet = gc.open_by_url(url_sheet)
         worksheet = spreadsheet.worksheet(hoja)
-        data = worksheet.get_all_records()
-        return pd.DataFrame(data)
+
+        # ── FIX: preservar ceros iniciales en códigos numéricos ──────────────
+        data = worksheet.get_all_records(numericise_ignore=['all'])
+        df = pd.DataFrame(data)
+
+        # Forzar columna de código a string limpio (por si queda algún residuo)
+        if "Código Producto" in df.columns:
+            df["Código Producto"] = df["Código Producto"].astype(str).str.strip()
+
+        return df
 
     except Exception as e:
         st.error(f"Error cargando inventario: {e}")
@@ -167,10 +182,13 @@ def actualizar_stock_sheets(
         spreadsheet = gc.open_by_url(url_sheet)
         worksheet = spreadsheet.worksheet(hoja)
 
-        lista_codigos = worksheet.col_values(2)
+        # col_values también puede traer números convertidos;
+        # convertimos todo a string para comparar correctamente
+        lista_codigos = [str(c).strip() for c in worksheet.col_values(2)]
+        codigo_buscar = str(codigo_producto).strip()
 
-        if codigo_producto in lista_codigos:
-            row_idx = lista_codigos.index(codigo_producto) + 1
+        if codigo_buscar in lista_codigos:
+            row_idx = lista_codigos.index(codigo_buscar) + 1
             valor_celda = worksheet.cell(row_idx, 4).value
             stock_actual = int(float(valor_celda)) if valor_celda else 0
             nuevo_stock = max(0, stock_actual - cantidad_a_restar)
@@ -202,7 +220,7 @@ def actualizar_stock_batch_sheets(
     Parámetros
     ----------
     items : list[dict]
-        [{"codigo_producto": "ABC123", "cantidad_a_restar": 2}, ...]
+        [{"codigo_producto": "0100221", "cantidad_a_restar": 2}, ...]
     url_sheet : str
         URL de la Google Sheet de inventario.
     hoja : str
@@ -216,22 +234,23 @@ def actualizar_stock_batch_sheets(
         spreadsheet = gc.open_by_url(url_sheet)
         worksheet = spreadsheet.worksheet(hoja)
 
-        # ── Lectura única de toda la hoja ────────────────────────────────────
-        # get_all_values() devuelve lista de listas (incluye el header en [0])
+        # ── Lectura única de toda la hoja ─────────────────────────────────────
+        # get_all_values() devuelve strings puros — los ceros iniciales
+        # se preservan de forma nativa sin necesidad de parámetros extra.
         # Columna B = índice 1 → Código Producto
         # Columna D = índice 3 → Stock
-        # En gspread Cell(row, col) ambos son 1-based, por eso col = índice+1
-        COL_CODIGO_IDX = 1   # índice 0-based en la lista de la fila
-        COL_STOCK_IDX  = 3   # índice 0-based en la lista de la fila
-        COL_STOCK_NUM  = 4   # número de columna 1-based para gspread Cell
+        COL_CODIGO_IDX = 1
+        COL_STOCK_IDX  = 3
+        COL_STOCK_NUM  = 4   # 1-based para gspread Cell
 
         data = worksheet.get_all_values()
         if not data or len(data) < 2:
             return False
 
-        # Construir mapa código → (fila 1-based, stock actual)
+        # Construir mapa código → {fila 1-based, stock actual}
+        # str().strip() en el código garantiza comparación exacta con ceros
         mapa = {}
-        for i, row in enumerate(data[1:], start=2):  # start=2: fila 1 es el header
+        for i, row in enumerate(data[1:], start=2):
             if len(row) > COL_CODIGO_IDX:
                 codigo = str(row[COL_CODIGO_IDX]).strip()
                 try:
@@ -240,7 +259,7 @@ def actualizar_stock_batch_sheets(
                     stock = 0
                 mapa[codigo] = {"fila": i, "stock": stock}
 
-        # ── Preparar objetos Cell con el stock nuevo ─────────────────────────
+        # ── Preparar objetos Cell con el stock nuevo ──────────────────────────
         celdas_a_actualizar = []
         for item in items:
             codigo = str(item["codigo_producto"]).strip()
@@ -255,7 +274,7 @@ def actualizar_stock_batch_sheets(
                 Cell(row=mapa[codigo]["fila"], col=COL_STOCK_NUM, value=nuevo_stock)
             )
 
-        # ── Escritura única con todas las celdas juntas ──────────────────────
+        # ── Escritura única con todas las celdas juntas ───────────────────────
         if celdas_a_actualizar:
             worksheet.update_cells(celdas_a_actualizar)
 
@@ -266,7 +285,75 @@ def actualizar_stock_batch_sheets(
         return False
 
 
-# ── Estructura de referencia ─────────────────────────────────────────────────
+def verificar_stock_disponible(
+    items: list,
+    url_sheet: str,
+    hoja: str = "Inventario"
+) -> list:
+    """
+    Verifica en tiempo real si hay stock suficiente para cada producto.
+    Úsala justo antes de guardar el pedido para detectar colisiones
+    cuando múltiples empleados piden el mismo producto simultáneamente.
+
+    Retorna lista de productos con stock insuficiente:
+        [{"producto": "...", "pedido": 5, "disponible": 2}, ...]
+    Si retorna lista vacía, todos los productos tienen stock suficiente.
+    """
+    try:
+        gc = get_gsheet_connection()
+        if gc is None:
+            return []
+
+        spreadsheet = gc.open_by_url(url_sheet)
+        worksheet = spreadsheet.worksheet(hoja)
+
+        # Una sola lectura fresca — no usa caché
+        data = worksheet.get_all_values()
+        if not data or len(data) < 2:
+            return []
+
+        COL_CODIGO_IDX = 1
+        COL_STOCK_IDX  = 3
+        COL_NOMBRE_IDX = 2
+
+        # Mapa código → stock real actual en Sheets
+        mapa_stock_real = {}
+        for row in data[1:]:
+            if len(row) > COL_CODIGO_IDX:
+                codigo = str(row[COL_CODIGO_IDX]).strip()
+                nombre = str(row[COL_NOMBRE_IDX]).strip() if len(row) > COL_NOMBRE_IDX else codigo
+                try:
+                    stock = int(float(row[COL_STOCK_IDX])) if len(row) > COL_STOCK_IDX and row[COL_STOCK_IDX] else 0
+                except (ValueError, TypeError):
+                    stock = 0
+                mapa_stock_real[codigo] = {"stock": stock, "nombre": nombre}
+
+        # Comparar lo pedido contra el stock real
+        sin_stock = []
+        for item in items:
+            codigo  = str(item["codigo_producto"]).strip()
+            pedido  = int(item["cantidad_a_restar"])
+            entrada = mapa_stock_real.get(codigo)
+
+            if entrada is None:
+                continue
+
+            if entrada["stock"] < pedido:
+                sin_stock.append({
+                    "producto":    entrada["nombre"],
+                    "codigo":      codigo,
+                    "pedido":      pedido,
+                    "disponible":  entrada["stock"]
+                })
+
+        return sin_stock
+
+    except Exception as e:
+        st.error(f"Error al verificar stock: {e}")
+        return []
+
+
+# ── Estructura de referencia ──────────────────────────────────────────────────
 INVENTARIO_HEADERS = [
     "Línea", "Código Producto", "Nombre Producto",
     "Stock", "Precio Unitario", "Empresa"
