@@ -346,39 +346,42 @@ else:
                 st.markdown('<div class="contenedor-carrito">', unsafe_allow_html=True)
 
                 for pos, item in enumerate(st.session_state.carrito):
-                    datos   = indice_productos.get(item['producto'])
-                    s_max   = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
-                    foto    = datos[COL_IMAGEN] if datos is not None and COL_IMAGEN and COL_IMAGEN in datos else ""
+                                    datos   = indice_productos.get(item['producto'])
+                                    s_max   = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
+                                    foto    = datos[COL_IMAGEN] if datos is not None and COL_IMAGEN and COL_IMAGEN in datos else ""
 
-                    c_info, c_cant, c_del = st.columns([2.5, 1.2, 0.4])
+                                    # ── CONTROL DE CONCURRENCIA VISUAL (Evita el StreamlitValueAboveMaxError) ──
+                                    # Si el stock real en la nube bajó mientras el usuario miraba el catálogo,
+                                    # ajustamos automáticamente su carrito al stock máximo actual sin romper la app.
+                                    cantidad_guardada = int(item['cantidad'])
+                                    if cantidad_guardada > s_max:
+                                        cantidad_guardada = max(1, s_max)
+                                        st.session_state.carrito[pos]['cantidad'] = cantidad_guardada
+                                        st.session_state.carrito[pos]['subtotal'] = cantidad_guardada * item['precio_unitario']
+                                        st.warning(f"⚠️ El stock de **{item['producto']}** disminuyó. Ajustamos tu carrito al máximo disponible ({s_max} ud.).")
 
-                    with c_info:
-                        html_item = render_estructura_item_carrito(
-                            nombre=item['producto'],
-                            precio_total=item['subtotal'],
-                            url_foto=foto
-                        )
-                        st.markdown(f'<div class="item-carrito">{html_item}</div>', unsafe_allow_html=True)
+                                    c_info, c_cant, c_del = st.columns([2.5, 1.2, 0.4])
 
-                    with c_cant:
-                        st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
-                        nueva_cant = st.number_input(
-                            "Cant", min_value=1, max_value=s_max,
-                            value=int(item['cantidad']), step=1,
-                            key=f"cant_{pos}", label_visibility="collapsed"
-                        )
-                        if int(nueva_cant) != int(item['cantidad']):
-                            st.session_state.carrito[pos]['cantidad'] = int(nueva_cant)
-                            st.session_state.carrito[pos]['subtotal'] = int(nueva_cant) * item['precio_unitario']
-                            st.session_state.tab_idx = 1
-                            st.rerun(scope="fragment")
+                                    with c_info:
+                                        html_item = render_estructura_item_carrito(
+                                            nombre=item['producto'],
+                                            precio_total=item['subtotal'],
+                                            url_foto=foto
+                                        )
+                                        st.markdown(f'<div class="item-carrito">{html_item}</div>', unsafe_allow_html=True)
 
-                    with c_del:
-                        st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
-                        if st.button("🗑️", key=f"del_{pos}", help="Eliminar"):
-                            st.session_state.carrito.pop(pos)
-                            st.session_state.tab_idx = 1
-                            st.rerun(scope="fragment")
+                                    with c_cant:
+                                        st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
+                                        nueva_cant = st.number_input(
+                                            "Cant", min_value=1, max_value=max(s_max, 1),
+                                            value=cantidad_guardada, step=1,
+                                            key=f"cant_{pos}", label_visibility="collapsed"
+                                        )
+                                        if int(nueva_cant) != int(item['cantidad']):
+                                            st.session_state.carrito[pos]['cantidad'] = int(nueva_cant)
+                                            st.session_state.carrito[pos]['subtotal'] = int(nueva_cant) * item['precio_unitario']
+                                            st.session_state.tab_idx = 1
+                                            st.rerun(scope="fragment")
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
