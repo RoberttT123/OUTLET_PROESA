@@ -21,7 +21,7 @@ try:
         obtener_inventario_sheets,
         obtener_pedidos_empleado_sheets,
         guardar_pedido_sheets,
-        actualizar_stock_batch_sheets,
+        procesar_descuento_stock_seguro,  # <-- CAMBIO: Importamos la nueva función segura
         verificar_stock_disponible,
     )
     from src.database import obtener_datos_empleado, validar_empleado
@@ -165,7 +165,6 @@ COL_IMAGEN = "Imagen"          if "Imagen"          in df_inv.columns else None
 if not st.session_state.logged_in:
     logo = get_logo_b64()
     
-    # CORRECCIÓN SINTAXIS 1: Procesar el HTML del logo afuera del f-string principal
     html_logo = f'<img src="data:image/png;base64,{logo}" style="height:210px;width:auto;object-fit:contain;margin-top:-20px;">' if logo else ''
     
     st.markdown(f"""
@@ -211,7 +210,6 @@ if not st.session_state.logged_in:
 else:
     logo = get_logo_b64()
     
-    # CORRECCIÓN SINTAXIS 2: Procesar el componente visual del header antes
     html_header_media = f'<img src="data:image/png;base64,{logo}" style="height:100px;object-fit:contain;">' if logo else "🛒"
     
     st.markdown(f"""
@@ -241,7 +239,6 @@ else:
         label_c   = f"🛒 Carrito ({total_uds})" if total_uds > 0 else "🛒 Carrito"
         opciones  = ["📦 Catálogo", label_c, "📋 Mis Pedidos"]
 
-        # ── st.radio estilizado como tabs ─────────────────────────────────────
         tab_sel = st.radio(
             "tabs_nav",
             opciones,
@@ -419,7 +416,7 @@ else:
                 st.info("No se registran transacciones previas en su cuenta.")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # ENVÍO DEL PEDIDO
+    # ENVÍO DEL PEDIDO (MÉTODO MODIFICADO Y TRANSACCIONAL SEGURIZADO)
     # ──────────────────────────────────────────────────────────────────────────
     def enviar_pedido():
         if not st.session_state.carrito:
@@ -444,35 +441,35 @@ else:
 
         with st.status("Procesando tu pedido...", expanded=True) as estado:
             try:
-                st.write("🔍 Verificando disponibilidad en tiempo real...")
-                sin_stock = verificar_stock_disponible(
-                    items=[{"codigo_producto": i["codigo_producto"],
-                            "cantidad_a_restar": i["cantidad"]} for i in items],
+                # ── PASO 1: Intentar validar disponibilidad y descontar de inmediato ──
+                st.write("🔍 Verificando disponibilidad y reservando stock en tiempo real...")
+                
+                formato_items = [{"codigo_producto": i["codigo_producto"], "cantidad_a_restar": i["cantidad"]} for i in items]
+                transaccion = procesar_descuento_stock_seguro(
+                    items=formato_items,
                     url_sheet=INVENTARIO_SHEET_URL,
                     hoja=INVENTARIO_HOJA_NAME
                 )
-                if sin_stock:
-                    estado.update(label="⚠️ Stock insuficiente.", state="error")
-                    for p in sin_stock:
+                
+                # Si falló la validación atómica (concurrencia de usuarios detectada)
+                if not transaccion["exito"]:
+                    estado.update(label="⚠️ Conflicto de stock detectado.", state="error")
+                    for p in transaccion["sin_stock"]:
                         st.error(
                             f"❌ **{p['producto']}** — "
-                            f"Pediste {p['pedido']} ud. pero solo quedan {p['disponible']}."
+                            f"Solicitaste {p['pedido']} ud. pero otro usuario finalizó su compra un instante antes e inventario actual tiene: {p['disponible']} ud."
                         )
-                    st.warning("Ajusta las cantidades en el carrito e intenta de nuevo.")
+                    st.warning("El carrito no se ha borrado. Modifica las cantidades deseadas e intenta enviar de nuevo.")
                     return
 
-                st.write("📝 Registrando pedido...")
+                # ── PASO 2: Si el stock ya se redujo con éxito en la nube, escribimos el pedido ──
+                st.write("📝 Guardando el registro del pedido...")
                 ok = guardar_pedido_sheets(
                     st.session_state.cod_emp, st.session_state.nom_emp,
                     items, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME
                 )
+                
                 if ok:
-                    st.write("📦 Actualizando stock...")
-                    actualizar_stock_batch_sheets(
-                        items=[{"codigo_producto": i["codigo_producto"],
-                                "cantidad_a_restar": i["cantidad"]} for i in items],
-                        url_sheet=INVENTARIO_SHEET_URL, hoja=INVENTARIO_HOJA_NAME
-                    )
                     st.session_state.carrito  = []
                     st.session_state.tab_idx  = 0
                     st.cache_data.clear()
@@ -480,8 +477,9 @@ else:
                     st.toast("🎉 ¡Tu pedido fue enviado con éxito!", icon="🛒")
                     st.rerun()
                 else:
-                    estado.update(label="❌ Falló el registro.", state="error")
-                    st.error("Google Sheets rechazó la inserción. Intenta de nuevo.")
+                    # Excepción perimetral en la inserción del log de pedidos
+                    estado.update(label="❌ Error al escribir el registro físico del pedido.", state="error")
+                    st.error("El stock fue apartado correctamente pero la fila de control falló. Contacta al administrador.")
 
             except Exception as e:
                 estado.update(label="❌ Error inesperado.", state="error")
