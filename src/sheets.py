@@ -4,6 +4,7 @@ MÓDULO DE CONECTIVIDAD Y PERSISTENCIA CON GOOGLE SHEETS - OUTLET PROESA
 ----------------------------------------------------------------
 Centraliza todas las operaciones de lectura, escritura y transacciones
 atómicas con la API de Google Drive/Sheets a través de gspread.
+Incluye un mecanismo de exclusión mutua para evitar condiciones de carrera.
 
 Desarrollado para: PROYECTO_OUTLET
 Última actualización: Mayo 2026
@@ -13,6 +14,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import pytz
+import threading  # ── NUEVA IMPORTACIÓN: Control de concurrencia a nivel de hilos ──
 
 try:
     import gspread
@@ -21,6 +23,11 @@ try:
     HAS_GSPREAD = True
 except ImportError:
     HAS_GSPREAD = False
+
+# ── CERROJO MUTEX GLOBAL ──
+# Este objeto asegura que si dos hilos de Streamlit intentan descontar stock
+# en el mismo milisegundo, hagan fila india y se procesen uno por uno de forma aislada.
+LOCK_TRANSACCIONAL_STOCK = threading.Lock()
 
 
 def get_gsheet_connection():
@@ -180,9 +187,7 @@ def verificar_stock_disponible(
 ) -> list:
     """
     Verifica en tiempo real si hay stock suficiente para cada producto.
-    Retorna lista de productos con stock insuficiente:
-        [{"producto": "...", "pedido": 5, "disponible": 2}, ...]
-    Si retorna lista vacía, todos los productos tienen stock suficiente.
+    Retorna lista de productos con stock insuficiente.
     """
     try:
         gc = get_gsheet_connection()
@@ -192,7 +197,6 @@ def verificar_stock_disponible(
         spreadsheet = gc.open_by_url(url_sheet)
         worksheet = spreadsheet.worksheet(hoja)
 
-        # Una sola lectura fresca — no usa caché
         data = worksheet.get_all_values()
         if not data or len(data) < 2:
             return []
@@ -201,7 +205,6 @@ def verificar_stock_disponible(
         COL_STOCK_IDX  = 3
         COL_NOMBRE_IDX = 2
 
-        # Mapa código → stock real actual en Sheets
         mapa_stock_real = {}
         for row in data[1:]:
             if len(row) > COL_CODIGO_IDX:
@@ -213,7 +216,6 @@ def verificar_stock_disponible(
                     stock = 0
                 mapa_stock_real[codigo] = {"stock": stock, "nombre": nombre}
 
-        # Comparar lo pedido contra el stock real
         sin_stock = []
         for item in items:
             codigo  = str(item["codigo_producto"]).strip()
@@ -238,96 +240,94 @@ def verificar_stock_disponible(
         return []
 
 
-# ── NUEVA FUNCIÓN TRANSACCIONAL ATÓMICA (ANTI-CONCURRENCIA) ────────────────────
+# ── FUNCIÓN TRANSACCIONAL BLINDADA (CON EXCLUSIÓN MUTUA DE HILOS) ──────────────
 def procesar_descuento_stock_seguro(
     items: list,
     url_sheet: str,
     hoja: str = "Inventario"
 ) -> dict:
     """
-    Fusión Atómica: Lee el stock real fresco, verifica la disponibilidad,
-    y si TODO el carrito tiene existencias, descuenta y escribe los cambios
-    inmediatamente en un solo lote batch de red (bloqueando lógicamente colisiones).
+    Fusión Atómica con Mutex Lock: Envuelve las peticiones críticas de red.
+    Si dos usuarios llaman a esta función al mismo tiempo, el cerrojo detiene
+    al segundo usuario temporalmente hasta que el primero lea, verifique y descuente.
     
-    Retorna un diccionario estructurado:
-    {
-        "exito": True / False,
-        "sin_stock": [] # Contiene la lista detallada si falló por colisión
-    }
+    Garantiza consistencia absoluta eliminando las condiciones de carrera (Race Conditions).
     """
-    try:
-        gc = get_gsheet_connection()
-        if gc is None:
+    # El bloque 'with' asegura que el cerrojo se libere pase lo que pase (incluso si hay un error)
+    with LOCK_TRANSACCIONAL_STOCK:
+        try:
+            gc = get_gsheet_connection()
+            if gc is None:
+                return {"exito": False, "sin_stock": []}
+
+            spreadsheet = gc.open_by_url(url_sheet)
+            worksheet = spreadsheet.worksheet(hoja)
+
+            COL_CODIGO_IDX = 1
+            COL_STOCK_IDX  = 3
+            COL_NOMBRE_IDX = 2
+            COL_STOCK_NUM  = 4  # Columna D basada en índice 1 para gspread Cell
+
+            # 1. PASO CRÍTICO: Descarga de datos protegida por el cerrojo de memoria
+            data = worksheet.get_all_values()
+            if not data or len(data) < 2:
+                return {"exito": False, "sin_stock": []}
+
+            # Construir mapa con el inventario real en este microsegundo
+            mapa_actual = {}
+            for i, row in enumerate(data[1:], start=2):
+                if len(row) > COL_CODIGO_IDX:
+                    codigo = str(row[COL_CODIGO_IDX]).strip()
+                    nombre = str(row[COL_NOMBRE_IDX]).strip() if len(row) > COL_NOMBRE_IDX else codigo
+                    try:
+                        stock = int(float(row[COL_STOCK_IDX])) if len(row) > COL_STOCK_IDX and row[COL_STOCK_IDX] else 0
+                    except (ValueError, TypeError):
+                        stock = 0
+                    mapa_actual[codigo] = {"fila": i, "stock": stock, "nombre": nombre}
+
+            # 2. VERIFICACIÓN ATÓMICA
+            sin_stock = []
+            celdas_a_actualizar = []
+
+            for item in items:
+                codigo = str(item["codigo_producto"]).strip()
+                pedido = int(item["cantidad_a_restar"])
+
+                if codigo not in mapa_actual:
+                    continue
+
+                stock_real = mapa_actual[codigo]["stock"]
+                nombre_prod = mapa_actual[codigo]["nombre"]
+
+                if stock_real < pedido:
+                    sin_stock.append({
+                        "producto": nombre_prod,
+                        "codigo": codigo,
+                        "pedido": pedido,
+                        "disponible": stock_real
+                    })
+                else:
+                    # Cálculo secuencial seguro
+                    nuevo_stock = stock_real - pedido
+                    celdas_a_actualizar.append(
+                        Cell(row=mapa_actual[codigo]["fila"], col=COL_STOCK_NUM, value=nuevo_stock)
+                    )
+
+            # 3. VEREDICTO DE LA TRANSACCIÓN
+            if sin_stock:
+                # Retorna la lista; el hilo actual sale y el siguiente usuario en la fila toma el control
+                return {"exito": False, "sin_stock": sin_stock}
+
+            # Guardamos los cambios inmediatamente en lote si la prueba fue superada
+            if celdas_a_actualizar:
+                worksheet.update_cells(celdas_a_actualizar)
+                return {"exito": True, "sin_stock": []}
+
             return {"exito": False, "sin_stock": []}
 
-        spreadsheet = gc.open_by_url(url_sheet)
-        worksheet = spreadsheet.worksheet(hoja)
-
-        COL_CODIGO_IDX = 1
-        COL_STOCK_IDX  = 3
-        COL_NOMBRE_IDX = 2
-        COL_STOCK_NUM  = 4  # Columna 4 (D) para objeto Cell basado en 1
-
-        # 1. PASO CRÍTICO: Descarga instantánea de la hoja en este preciso milisegundo
-        data = worksheet.get_all_values()
-        if not data or len(data) < 2:
+        except Exception as e:
+            st.error(f"Error crítico en la transacción de stock: {e}")
             return {"exito": False, "sin_stock": []}
-
-        # Construir mapa del estado real actual del inventario en Sheets
-        mapa_actual = {}
-        for i, row in enumerate(data[1:], start=2):
-            if len(row) > COL_CODIGO_IDX:
-                codigo = str(row[COL_CODIGO_IDX]).strip()
-                nombre = str(row[COL_NOMBRE_IDX]).strip() if len(row) > COL_NOMBRE_IDX else codigo
-                try:
-                    stock = int(float(row[COL_STOCK_IDX])) if len(row) > COL_STOCK_IDX and row[COL_STOCK_IDX] else 0
-                except (ValueError, TypeError):
-                    stock = 0
-                mapa_actual[codigo] = {"fila": i, "stock": stock, "nombre": nombre}
-
-        # 2. VERIFICACIÓN IN SITU (Antes de proceder a escribir o dar el OK)
-        sin_stock = []
-        celdas_a_actualizar = []
-
-        for item in items:
-            codigo = str(item["codigo_producto"]).strip()
-            pedido = int(item["cantidad_a_restar"])
-
-            if codigo not in mapa_actual:
-                continue
-
-            stock_real = mapa_actual[codigo]["stock"]
-            nombre_prod = mapa_actual[codigo]["nombre"]
-
-            if stock_real < pedido:
-                sin_stock.append({
-                    "producto": nombre_prod,
-                    "codigo": codigo,
-                    "pedido": pedido,
-                    "disponible": stock_real
-                })
-            else:
-                # Si hay suficiente stock, preparamos la actualización de la celda
-                nuevo_stock = stock_real - pedido
-                celdas_a_actualizar.append(
-                    Cell(row=mapa_actual[codigo]["fila"], col=COL_STOCK_NUM, value=nuevo_stock)
-                )
-
-        # 3. VEREDICTO TRANSACCIONAL
-        if sin_stock:
-            # Si al menos un producto se quedó sin stock debido a otro usuario, abortamos todo
-            return {"exito": False, "sin_stock": sin_stock}
-
-        # Si todo el carrito superó la prueba con el stock fresco de este instante, guardamos en lote
-        if celdas_a_actualizar:
-            worksheet.update_cells(celdas_a_actualizar)
-            return {"exito": True, "sin_stock": []}
-
-        return {"exito": False, "sin_stock": []}
-
-    except Exception as e:
-        st.error(f"Error crítico en la transacción de stock: {e}")
-        return {"exito": False, "sin_stock": []}
 
 
 def actualizar_stock_sheets(
