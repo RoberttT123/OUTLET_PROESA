@@ -230,8 +230,53 @@ else:
         except Exception:
             return pd.DataFrame()
 
+    # ── FUNCIÓN DE ENVÍO PREPARADA A NIVEL GLOBAL (EVITA SYNTAXERROR Y CONTROL DE CONCURRENCIA) ──
+    def ejecutar_envio_transaccional(items):
+        with st.status("Procesando tu pedido...", expanded=True) as estado:
+            try:
+                st.write("🔍 Verificando disponibilidad y reservando stock en tiempo real...")
+                
+                formato_items = [{"codigo_producto": i["codigo_producto"], "cantidad_a_restar": i["cantidad"]} for i in items]
+                transaccion = procesar_descuento_stock_seguro(
+                    items=formato_items,
+                    url_sheet=INVENTARIO_SHEET_URL,
+                    hoja=INVENTARIO_HOJA_NAME
+                )
+                
+                if not transaccion["exito"]:
+                    estado.update(label="⚠️ Conflicto de stock detectado.", state="error")
+                    for p in transaccion["sin_stock"]:
+                        st.error(
+                            f"❌ **{p['producto']}** — Solicitaste {p['pedido']} ud. pero ya no hay disponibilidad suficiente (Quedan: {p['disponible']} ud.)."
+                        )
+                    return False
+
+                st.write("📝 Guardando el registro oficial del pedido...")
+                ok = guardar_pedido_sheets(
+                    st.session_state.cod_emp, st.session_state.nom_emp,
+                    items, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME
+                )
+                
+                if ok:
+                    st.session_state.carrito = []
+                    st.session_state.tab_idx = 0
+                    st.cache_data.clear()
+                    estado.update(label="✅ ¡Pedido procesado con éxito!", state="complete")
+                    st.toast("🎉 ¡Tu pedido fue enviado con éxito!", icon="🛒")
+                    return True
+                else:
+                    estado.update(label="❌ Error al escribir el registro físico del pedido.", state="error")
+                    st.error("El stock fue apartado correctamente pero la fila de control falló. Contacta al administrador.")
+                    return False
+
+            except Exception as e:
+                estado.update(label="❌ Error inesperado.", state="error")
+                st.error(f"Detalle: {e}")
+                return False
+
+
     # ──────────────────────────────────────────────────────────────────────────
-    # FRAGMENT principal
+    # FRAGMENT principal de renderizado
     # ──────────────────────────────────────────────────────────────────────────
     @st.fragment
     def render_pedido():
@@ -346,42 +391,47 @@ else:
                 st.markdown('<div class="contenedor-carrito">', unsafe_allow_html=True)
 
                 for pos, item in enumerate(st.session_state.carrito):
-                                    datos   = indice_productos.get(item['producto'])
-                                    s_max   = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
-                                    foto    = datos[COL_IMAGEN] if datos is not None and COL_IMAGEN and COL_IMAGEN in datos else ""
+                    datos   = indice_productos.get(item['producto'])
+                    s_max   = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
+                    foto    = datos[COL_IMAGEN] if datos is not None and COL_IMAGEN and COL_IMAGEN in datos else ""
 
-                                    # ── CONTROL DE CONCURRENCIA VISUAL (Evita el StreamlitValueAboveMaxError) ──
-                                    # Si el stock real en la nube bajó mientras el usuario miraba el catálogo,
-                                    # ajustamos automáticamente su carrito al stock máximo actual sin romper la app.
-                                    cantidad_guardada = int(item['cantidad'])
-                                    if cantidad_guardada > s_max:
-                                        cantidad_guardada = max(1, s_max)
-                                        st.session_state.carrito[pos]['cantidad'] = cantidad_guardada
-                                        st.session_state.carrito[pos]['subtotal'] = cantidad_guardada * item['precio_unitario']
-                                        st.warning(f"⚠️ El stock de **{item['producto']}** disminuyó. Ajustamos tu carrito al máximo disponible ({s_max} ud.).")
+                    # Control de concurrencia visual dinámico
+                    cantidad_guardada = int(item['cantidad'])
+                    if cantidad_guardada > s_max:
+                        cantidad_guardada = max(1, s_max)
+                        st.session_state.carrito[pos]['cantidad'] = cantidad_guardada
+                        st.session_state.carrito[pos]['subtotal'] = cantidad_guardada * item['precio_unitario']
+                        st.warning(f"⚠️ El stock de **{item['producto']}** disminuyó. Se ajustó al máximo disponible ({s_max} ud.).")
 
-                                    c_info, c_cant, c_del = st.columns([2.5, 1.2, 0.4])
+                    c_info, c_cant, c_del = st.columns([2.5, 1.2, 0.4])
 
-                                    with c_info:
-                                        html_item = render_estructura_item_carrito(
-                                            nombre=item['producto'],
-                                            precio_total=item['subtotal'],
-                                            url_foto=foto
-                                        )
-                                        st.markdown(f'<div class="item-carrito">{html_item}</div>', unsafe_allow_html=True)
+                    with c_info:
+                        html_item = render_estructura_item_carrito(
+                            nombre=item['producto'],
+                            precio_total=item['subtotal'],
+                            url_foto=foto
+                        )
+                        st.markdown(f'<div class="item-carrito">{html_item}</div>', unsafe_allow_html=True)
 
-                                    with c_cant:
-                                        st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
-                                        nueva_cant = st.number_input(
-                                            "Cant", min_value=1, max_value=max(s_max, 1),
-                                            value=cantidad_guardada, step=1,
-                                            key=f"cant_{pos}", label_visibility="collapsed"
-                                        )
-                                        if int(nueva_cant) != int(item['cantidad']):
-                                            st.session_state.carrito[pos]['cantidad'] = int(nueva_cant)
-                                            st.session_state.carrito[pos]['subtotal'] = int(nueva_cant) * item['precio_unitario']
-                                            st.session_state.tab_idx = 1
-                                            st.rerun(scope="fragment")
+                    with c_cant:
+                        st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
+                        nueva_cant = st.number_input(
+                            "Cant", min_value=1, max_value=max(s_max, 1),
+                            value=cantidad_guardada, step=1,
+                            key=f"cant_{pos}", label_visibility="collapsed"
+                        )
+                        if int(nueva_cant) != int(item['cantidad']):
+                            st.session_state.carrito[pos]['cantidad'] = int(nueva_cant)
+                            st.session_state.carrito[pos]['subtotal'] = int(nueva_cant) * item['precio_unitario']
+                            st.session_state.tab_idx = 1
+                            st.rerun(scope="fragment")
+
+                    with c_del:
+                        st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
+                        if st.button("🗑️", key=f"del_{pos}", help="Eliminar"):
+                            st.session_state.carrito.pop(pos)
+                            st.session_state.tab_idx = 1
+                            st.rerun(scope="fragment")
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -394,9 +444,28 @@ else:
                 </div>
                 """, unsafe_allow_html=True)
 
-                if st.button("REALIZAR PEDIDO", type="primary",
-                             use_container_width=True, key="btn_enviar"):
-                    enviar_pedido()
+                # Creamos la lista estructurada de items a enviar
+                lista_envio = []
+                for item in st.session_state.carrito:
+                    fila = indice_productos.get(item['producto'])
+                    if fila is None:
+                        continue
+                    lista_envio.append({
+                        "codigo_producto": str(fila[COL_CODIGO]),
+                        "producto":        str(item['producto']),
+                        "cantidad":        int(item['cantidad']),
+                        "precio_unitario": float(item['precio_unitario']),
+                        "linea":           str(fila[COL_LINEA]),
+                        "descuento":       0,
+                        "stock_actual":    _parse_stock(fila[COL_STOCK]),
+                        "empresa":         st.session_state.empresa or str(fila[COL_EMP])
+                    })
+
+                if st.button("REALIZAR PEDIDO", type="primary", use_container_width=True, key="btn_enviar"):
+                    if lista_envio:
+                        exito = ejecutar_envio_transaccional(lista_envio)
+                        if exito:
+                            st.rerun()
 
         # ══════════════════════════════════════════════════════════════════════
         # TAB 2 — HISTORIAL
@@ -417,76 +486,6 @@ else:
                                 unsafe_allow_html=True)
             else:
                 st.info("No se registran transacciones previas en su cuenta.")
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # ENVÍO DEL PEDIDO (MÉTODO MODIFICADO Y TRANSACCIONAL SEGURIZADO)
-    # ──────────────────────────────────────────────────────────────────────────
-    def enviar_pedido():
-        if not st.session_state.carrito:
-            st.error("El carrito está vacío.")
-            return
-
-        items = []
-        for item in st.session_state.carrito:
-            fila = indice_productos.get(item['producto'])
-            if fila is None:
-                continue
-            items.append({
-                "codigo_producto": str(fila[COL_CODIGO]),
-                "producto":        str(item['producto']),
-                "cantidad":        int(item['cantidad']),
-                "precio_unitario": float(item['precio_unitario']),
-                "linea":           str(fila[COL_LINEA]),
-                "descuento":       0,
-                "stock_actual":    _parse_stock(fila[COL_STOCK]),
-                "empresa":         st.session_state.empresa or str(fila[COL_EMP])
-            })
-
-        with st.status("Procesando tu pedido...", expanded=True) as estado:
-            try:
-                # ── PASO 1: Intentar validar disponibilidad y descontar de inmediato ──
-                st.write("🔍 Verificando disponibilidad y reservando stock en tiempo real...")
-                
-                formato_items = [{"codigo_producto": i["codigo_producto"], "cantidad_a_restar": i["cantidad"]} for i in items]
-                transaccion = procesar_descuento_stock_seguro(
-                    items=formato_items,
-                    url_sheet=INVENTARIO_SHEET_URL,
-                    hoja=INVENTARIO_HOJA_NAME
-                )
-                
-                # Si falló la validación atómica (concurrencia de usuarios detectada)
-                if not transaccion["exito"]:
-                    estado.update(label="⚠️ Conflicto de stock detectado.", state="error")
-                    for p in transaccion["sin_stock"]:
-                        st.error(
-                            f"❌ **{p['producto']}** — "
-                            f"Solicitaste {p['pedido']} ud. pero otro usuario finalizó su compra un instante antes e inventario actual tiene: {p['disponible']} ud."
-                        )
-                    st.warning("El carrito no se ha borrado. Modifica las cantidades deseadas e intenta enviar de nuevo.")
-                    return
-
-                # ── PASO 2: Si el stock ya se redujo con éxito en la nube, escribimos el pedido ──
-                st.write("📝 Guardando el registro del pedido...")
-                ok = guardar_pedido_sheets(
-                    st.session_state.cod_emp, st.session_state.nom_emp,
-                    items, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME
-                )
-                
-                if ok:
-                    st.session_state.carrito  = []
-                    st.session_state.tab_idx  = 0
-                    st.cache_data.clear()
-                    estado.update(label="✅ ¡Pedido procesado con éxito!", state="complete")
-                    st.toast("🎉 ¡Tu pedido fue enviado con éxito!", icon="🛒")
-                    st.rerun()
-                else:
-                    # Excepción perimetral en la inserción del log de pedidos
-                    estado.update(label="❌ Error al escribir el registro físico del pedido.", state="error")
-                    st.error("El stock fue apartado correctamente pero la fila de control falló. Contacta al administrador.")
-
-            except Exception as e:
-                estado.update(label="❌ Error inesperado.", state="error")
-                st.error(f"Detalle: {e}")
 
     render_pedido()
 
