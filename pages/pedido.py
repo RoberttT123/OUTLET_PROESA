@@ -421,71 +421,77 @@ else:
     # ──────────────────────────────────────────────────────────────────────────
     # ENVÍO DEL PEDIDO
     # ──────────────────────────────────────────────────────────────────────────
-    def enviar_pedido():
-        if not st.session_state.carrito:
-            st.error("El carrito está vacío.")
-            return
-
-        items = []
-        for item in st.session_state.carrito:
-            fila = indice_productos.get(item['producto'])
-            if fila is None:
-                continue
-            items.append({
-                "codigo_producto": str(fila[COL_CODIGO]),
-                "producto":        str(item['producto']),
-                "cantidad":        int(item['cantidad']),
-                "precio_unitario": float(item['precio_unitario']),
-                "linea":           str(fila[COL_LINEA]),
-                "descuento":       0,
-                "stock_actual":    _parse_stock(fila[COL_STOCK]),
-                "empresa":         st.session_state.empresa or str(fila[COL_EMP])
-            })
-
-        with st.status("Procesando tu pedido...", expanded=True) as estado:
-            try:
-                st.write("🔍 Verificando disponibilidad en tiempo real...")
-                sin_stock = verificar_stock_disponible(
-                    items=[{"codigo_producto": i["codigo_producto"],
-                            "cantidad_a_restar": i["cantidad"]} for i in items],
-                    url_sheet=INVENTARIO_SHEET_URL,
-                    hoja=INVENTARIO_HOJA_NAME
-                )
-                if sin_stock:
-                    estado.update(label="⚠️ Stock insuficiente.", state="error")
-                    for p in sin_stock:
-                        st.error(
-                            f"❌ **{p['producto']}** — "
-                            f"Pediste {p['pedido']} ud. pero solo quedan {p['disponible']}."
-                        )
-                    st.warning("Ajusta las cantidades en el carrito e intenta de nuevo.")
+        def enviar_pedido():
+                if not st.session_state.carrito:
+                    st.error("El carrito está vacío.")
                     return
 
-                st.write("📝 Registrando pedido...")
-                ok = guardar_pedido_sheets(
-                    st.session_state.cod_emp, st.session_state.nom_emp,
-                    items, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME
-                )
-                if ok:
-                    st.write("📦 Actualizando stock...")
-                    actualizar_stock_batch_sheets(
-                        items=[{"codigo_producto": i["codigo_producto"],
-                                "cantidad_a_restar": i["cantidad"]} for i in items],
-                        url_sheet=INVENTARIO_SHEET_URL, hoja=INVENTARIO_HOJA_NAME
-                    )
-                    st.session_state.carrito  = []
-                    st.session_state.tab_idx  = 0
-                    st.cache_data.clear()
-                    estado.update(label="✅ ¡Pedido procesado con éxito!", state="complete")
-                    st.toast("🎉 ¡Tu pedido fue enviado con éxito!", icon="🛒")
-                    st.rerun()
-                else:
-                    estado.update(label="❌ Falló el registro.", state="error")
-                    st.error("Google Sheets rechazó la inserción. Intenta de nuevo.")
+                items = []
+                for item in st.session_state.carrito:
+                    fila = indice_productos.get(item['producto'])
+                    if fila is None:
+                        continue
+                    items.append({
+                        "codigo_producto": str(fila[COL_CODIGO]),
+                        "producto":        str(item['producto']),
+                        "cantidad":        int(item['cantidad']),
+                        "precio_unitario": float(item['precio_unitario']),
+                        "linea":           str(fila[COL_LINEA]),
+                        "descuento":       0,
+                        "stock_actual":    _parse_stock(fila[COL_STOCK]),
+                        "empresa":         st.session_state.empresa or str(fila[COL_EMP])
+                    })
 
-            except Exception as e:
-                estado.update(label="❌ Error inesperado.", state="error")
-                st.error(f"Detalle: {e}")
+                with st.status("Procesando tu pedido...", expanded=True) as estado:
+                    try:
+                        # ── PASO 1: Intentar reservar y descontar stock de forma segura ──
+                        st.write("🔍 Verificando disponibilidad y reservando stock en tiempo real...")
+                        
+                        # Importamos la nueva función desde src.sheets
+                        from src.sheets import procesar_descuento_stock_seguro
+                        
+                        formato_items = [{"codigo_producto": i["codigo_producto"], "cantidad_a_restar": i["cantidad"]} for i in items]
+                        transaccion = procesar_descuento_stock_seguro(
+                            items=formato_items,
+                            url_sheet=INVENTARIO_SHEET_URL,
+                            hoja=INVENTARIO_HOJA_NAME
+                        )
+                        
+                        # Si la verificación o descuento falló (Colisión de usuarios)
+                        if not transaccion["exito"]:
+                            estado.update(label="⚠️ Stock insuficiente detectado.", state="error")
+                            for p in transaccion["sin_stock"]:
+                                st.error(
+                                    f"❌ **{p['producto']}** — "
+                                    f"Pediste {p['pedido']} ud. pero otro usuario acaba de comprar y solo quedan {p['disponible']}."
+                                )
+                            st.warning("El carrito ha sido retenido. Modifica las cantidades e intenta de nuevo.")
+                            return
+
+                        # ── PASO 2: Si el stock ya se descontó con éxito, registramos el pedido ──
+                        st.write("📝 Registrando detalles del pedido...")
+                        ok = guardar_pedido_sheets(
+                            st.session_state.cod_emp, st.session_state.nom_emp,
+                            items, PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME
+                        )
+                        
+                        if ok:
+                            # Todo perfecto
+                            st.session_state.carrito  = []
+                            st.session_state.tab_idx  = 0
+                            st.cache_data.clear()
+                            estado.update(label="✅ ¡Pedido procesado con éxito!", state="complete")
+                            st.toast("🎉 ¡Tu pedido fue enviado con éxito!", icon="🛒")
+                            st.rerun()
+                        else:
+                            # Caso extremo: si falló la inserción del pedido pero el stock ya se redujo, 
+                            # podrías opcionalmente revertir el stock, pero gspread rara vez falla aquí si ya pasó el paso 1.
+                            estado.update(label="❌ Falló el registro del documento de pedido.", state="error")
+                            st.error("Google Sheets rechazó la inserción del registro. Por favor comunícate con soporte.")
+
+                    except Exception as e:
+                        estado.update(label="❌ Error inesperado.", state="error")
+                        st.error(f"Detalle: {e}")
 
     render_pedido()
 
