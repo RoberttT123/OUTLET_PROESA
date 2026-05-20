@@ -238,6 +238,11 @@ if not st.session_state.logged_in:
 # PANTALLA 2: ENTORNO PRINCIPAL DE PEDIDOS DE COMPRA
 # ==============================================================================
 else:
+    # ── VERIFICACIÓN RE-RUN: Lanzar toast de éxito guardado en memoria antes de dibujar la UI ──
+    if "lanzar_toast_exito" in st.session_state and st.session_state["lanzar_toast_exito"]:
+        st.toast("🎉 ¡Tu pedido fue enviado con éxito!", icon="🛒")
+        del st.session_state["lanzar_toast_exito"]
+
     logo = get_logo_b64()
     html_header_media = f'<img src="data:image/png;base64,{logo}" style="height:100px;object-fit:contain;">' if logo else "🛒"
     
@@ -260,7 +265,7 @@ else:
         except Exception:
             return pd.DataFrame()
 
-    # ── FUNCIÓN TRANSACCIONAL DE NIVEL GLOBAL (PREVIENE COMPLETAMENTE SYNTAXERROR Y DUPLICACIONES) ──
+    # ── FUNCIÓN TRANSACCIONAL GLOBAL PERFECCIONADA ──
     def ejecutar_envio_transaccional(items):
         """
         Envía de forma segura el lote del pedido a procesar.
@@ -292,7 +297,7 @@ else:
                     
                     st.session_state["mensaje_colision"] = "\n".join(detalles)
                     
-                    # ── ¡NUEVA NOTIFICACIÓN TOAST ARRIBITA / FLOTANTE DE ERROR! ──
+                    # Notificación flotante de error instantánea (No requiere rerun, se renderiza in situ)
                     st.toast("⚠️ Error: No se pudo enviar el pedido. ¡Se agotó el stock!", icon="❌")
                     return False
 
@@ -307,8 +312,10 @@ else:
                     st.session_state.carrito = []
                     st.session_state.tab_idx = 0
                     st.cache_data.clear()
+                    
+                    # Guardamos la bandera de éxito para que el toast sobreviva de forma limpia al rerun
+                    st.session_state["lanzar_toast_exito"] = True
                     estado.update(label="✅ ¡Pedido procesado con éxito!", state="complete")
-                    st.toast("🎉 ¡Tu pedido fue enviado con éxito!", icon="🛒")
                     return True
                 else:
                     estado.update(label="❌ Error al escribir el registro físico del pedido.", state="error")
@@ -432,7 +439,7 @@ else:
         elif st.session_state.tab_idx == 1:
             st.markdown('<div class="section-title">🛒 Carrito de Compras</div>', unsafe_allow_html=True)
 
-            # ── RENDERIZADO DE LA ALERTA ROJA FIJA ARRIBITA EN EL CARRITO ──
+            # Renderizado de la alerta roja fija arriba en el carrito
             if "mensaje_colision" in st.session_state:
                 st.error("### 🚫 No se pudo enviar tu pedido por falta de existencias")
                 st.markdown(st.session_state["mensaje_colision"])
@@ -552,4 +559,6 @@ else:
             st.session_state[k] = False if k == 'logged_in' else ([] if k == 'carrito' else (0 if k == 'tab_idx' else None))
         if "mensaje_colision" in st.session_state:
             del st.session_state["mensaje_colision"]
+        if "lanzar_toast_exito" in st.session_state:
+            del st.session_state["lanzar_toast_exito"]
         st.rerun()
