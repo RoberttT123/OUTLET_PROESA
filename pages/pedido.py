@@ -326,13 +326,27 @@ else:
                     
                     # Guardamos los productos afectados en una lista estructurada para la UI limpia
                     detalles_html = ""
+# CONTROL DE FRACASO: Concurrencia detectada, otra persona ganó las unidades antes
+                if not transaccion["exito"]:
+                    estado.update(label="⚠️ Pedido rechazado por falta de stock.", state="error")
+                    
+                    # 1. Guardamos los productos afectados para la interfaz
+                    detalles_html = ""
                     for p in transaccion["sin_stock"]:
                         detalles_html += f"<li><b>{p['producto']}</b>: Solicitaste {p['pedido']} ud., pero otra persona finalizó su pedido un instante antes y agotó las existencias (Stock real: <b>{p['disponible']} ud.</b>).</li>"
                     
                     st.session_state["lista_productos_colision"] = detalles_html
                     
-                    # Notificación flotante de error instantánea
+                    # 2. Notificación flotante de error instantánea
                     st.toast("⚠️ Error: No se pudo enviar el pedido. ¡Se agotó el stock!", icon="❌")
+                    
+                    # ── ¡AQUÍ ESTÁ EL TRUCO DE MAGIA! ──
+                    # 3. Forzamos la limpieza de la caché de este usuario específico
+                    st.cache_data.clear()
+                    
+                    # 4. Hacemos un rerun para que el catálogo se recargue en segundo plano inmediatamente,
+                    #    pero SIN desloguear al vendedor ni sacarlo de la pestaña del carrito.
+                    st.rerun()
                     return False
 
                 # CONTROL DE ÉXITO: El stock ya está apartado en la nube, escribimos el log de auditoría
@@ -451,17 +465,36 @@ else:
                                         value=1, step=1,
                                         key=f"qty_{codigo}", label_visibility="collapsed"
                                     )
-                                with c_btn:
-                                    if st.button("➕ Solicitar", key=f"add_{codigo}", use_container_width=True):
-                                        st.session_state.carrito.append({
-                                            "codigo_producto": codigo,
-                                            "producto":        nombre,
-                                            "cantidad":        int(cant),
-                                            "precio_unitario": precio,
-                                            "subtotal":        precio * int(cant),
-                                        })
-                                        st.session_state.tab_idx = 0
-                                        st.rerun(scope="fragment")
+                                    with c_btn:
+                                                                        if st.button("➕ Solicitar", key=f"add_{codigo}", use_container_width=True):
+                                                                            # ── VALIDACIÓN LOGÍSTICA: Verificar si el ítem ya existe en el carrito ──
+                                                                            item_existente = None
+                                                                            for item in st.session_state.carrito:
+                                                                                if item["codigo_producto"] == codigo:
+                                                                                    item_existente = item
+                                                                                    break
+                                                                            
+                                                                            if item_existente:
+                                                                                # Si ya existía, acumulamos la cantidad cuidando no superar el stock real
+                                                                                nueva_cantidad_acumulada = item_existente["cantidad"] + int(cant)
+                                                                                if nueva_cantidad_acumulada > stock:
+                                                                                    nueva_cantidad_acumulada = stock
+                                                                                    st.toast(f"⚠️ Cantidad ajustada al stock máximo disponible ({stock} ud.)", icon="💡")
+                                                                                
+                                                                                item_existente["cantidad"] = nueva_cantidad_acumulada
+                                                                                item_existente["subtotal"] = nueva_cantidad_acumulada * precio
+                                                                            else:
+                                                                                # Si es un producto nuevo en el carrito, lo agregamos normalmente
+                                                                                st.session_state.carrito.append({
+                                                                                    "codigo_producto": codigo,
+                                                                                    "producto":        nombre,
+                                                                                    "cantidad":        int(cant),
+                                                                                    "precio_unitario": precio,
+                                                                                    "subtotal":        precio * int(cant),
+                                                                                })
+                                                                            
+                                                                            st.session_state.tab_idx = 0
+                                                                            st.rerun(scope="fragment")
                             else:
                                 st.button("🚫 No Disponible", key=f"dis_{codigo}",
                                           disabled=True, use_container_width=True)
