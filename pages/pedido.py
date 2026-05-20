@@ -99,6 +99,41 @@ div[data-testid="stRadio"] label[data-checked="true"] {
 div[data-testid="stRadio"] [data-testid="stWidgetLabel"] { display: none !important; }
 div[data-testid="stRadio"] span[data-testid="stMarkdownContainer"] p { margin: 0; }
 div[data-testid="stRadio"] div[data-baseweb="radio"] > div:first-child { display: none !important; }
+
+/* ── Contenedor Estético para Alertas de Falta de Stock ── */
+.alerta-stock-container {
+    background-color: #FFF5F5;
+    border-left: 4px solid #E63946;
+    border-radius: 6px;
+    padding: 1.2rem;
+    margin-top: 1.2rem;
+    box-shadow: 0 2px 4px rgba(230, 57, 70, 0.05);
+}
+.alerta-stock-titulo {
+    color: #E63946;
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-bottom: 0.6rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.alerta-stock-lista {
+    color: #4A4A4A;
+    font-size: 0.92rem;
+    line-height: 1.4;
+    margin-bottom: 0.8rem;
+    padding-left: 1.1rem;
+}
+.alerta-stock-sugerencia {
+    color: #666666;
+    font-size: 0.88rem;
+    border-top: 1px dashed #F3C6C9;
+    padding-top: 0.6rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -271,8 +306,8 @@ else:
         Envía de forma segura el lote del pedido a procesar.
         Maneja bloqueos lógicos de concurrencia y despliega notificaciones instantáneas si falla.
         """
-        if "mensaje_colision" in st.session_state:
-            del st.session_state["mensaje_colision"]
+        if "lista_productos_colision" in st.session_state:
+            del st.session_state["lista_productos_colision"]
 
         with st.status("Procesando tu pedido...", expanded=True) as estado:
             try:
@@ -289,15 +324,14 @@ else:
                 if not transaccion["exito"]:
                     estado.update(label="⚠️ Pedido rechazado por falta de stock.", state="error")
                     
-                    detalles = []
+                    # Guardamos los productos afectados en una lista estructurada para la UI limpia
+                    detalles_html = ""
                     for p in transaccion["sin_stock"]:
-                        detalles.append(
-                            f"• **{p['producto']}**: Solicitaste {p['pedido']} ud., pero otra persona finalizó su pedido un instante antes y agotó el stock disponible (Stock actual: {p['disponible']} ud.)."
-                        )
+                        detalles_html += f"<li><b>{p['producto']}</b>: Solicitaste {p['pedido']} ud., pero otra persona finalizó su pedido un instante antes y agotó las existencias (Stock real: <b>{p['disponible']} ud.</b>).</li>"
                     
-                    st.session_state["mensaje_colision"] = "\n".join(detalles)
+                    st.session_state["lista_productos_colision"] = detalles_html
                     
-                    # Notificación flotante de error instantánea (No requiere rerun, se renderiza in situ)
+                    # Notificación flotante de error instantánea
                     st.toast("⚠️ Error: No se pudo enviar el pedido. ¡Se agotó el stock!", icon="❌")
                     return False
 
@@ -439,13 +473,6 @@ else:
         elif st.session_state.tab_idx == 1:
             st.markdown('<div class="section-title">🛒 Carrito de Compras</div>', unsafe_allow_html=True)
 
-            # Renderizado de la alerta roja fija arriba en el carrito
-            if "mensaje_colision" in st.session_state:
-                st.error("### 🚫 No se pudo enviar tu pedido por falta de existencias")
-                st.markdown(st.session_state["mensaje_colision"])
-                st.info("💡 Sugerencia: Por favor, reduce la cantidad en el selector o remueve el producto agotado para poder procesar el resto de tus artículos.")
-                st.markdown("<hr style='border-color:#E63946; margin:1.5rem 0;'>", unsafe_allow_html=True)
-
             if not st.session_state.carrito:
                 st.info("Tu carrito está vacío. Agrega productos desde el Catálogo principal.")
             else:
@@ -523,11 +550,28 @@ else:
                         "empresa":         st.session_state.empresa or str(fila[COL_EMP])
                     })
 
+                # Botón de Procesamiento de Pedido
                 if st.button("REALIZAR PEDIDO", type="primary", use_container_width=True, key="btn_enviar"):
                     if lista_envio:
                         exito = ejecutar_envio_transaccional(lista_envio)
                         if exito:
                             st.rerun()
+
+                # ── ALERTA DE STOCK REDISEÑADA Y POSICIONADA ABAJO DEL BOTÓN ──
+                if "lista_productos_colision" in st.session_state:
+                    st.markdown(f"""
+                    <div class="alerta-stock-container">
+                        <div class="alerta-stock-titulo">
+                            🚫 No se pudo enviar tu pedido por falta de existencias
+                        </div>
+                        <ul class="alerta-stock-lista">
+                            {st.session_state["lista_productos_colision"]}
+                        </ul>
+                        <div class="alerta-stock-sugerencia">
+                            💡 <b>Sugerencia:</b> Por favor, reduce la cantidad en el selector o remueve el producto agotado para poder procesar el resto de tus artículos.
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
         # ══════════════════════════════════════════════════════════════════════
         # TAB 2 — HISTORIAL DE COMPRAS REGISTRADAS
@@ -557,8 +601,8 @@ else:
     if st.button("🚪 Cerrar Sesión", use_container_width=True):
         for k in ['logged_in','cod_emp','nom_emp','empresa','regional','carrito','tab_idx']:
             st.session_state[k] = False if k == 'logged_in' else ([] if k == 'carrito' else (0 if k == 'tab_idx' else None))
-        if "mensaje_colision" in st.session_state:
-            del st.session_state["mensaje_colision"]
+        if "lista_productos_colision" in st.session_state:
+            del st.session_state["lista_productos_colision"]
         if "lanzar_toast_exito" in st.session_state:
             del st.session_state["lanzar_toast_exito"]
         st.rerun()
