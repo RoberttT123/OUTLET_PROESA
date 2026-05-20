@@ -264,7 +264,7 @@ else:
     def ejecutar_envio_transaccional(items):
         """
         Envía de forma segura el lote del pedido a procesar.
-        Maneja bloqueos lógicos de concurrencia y despliega mensajes claros si falla.
+        Maneja bloqueos lógicos de concurrencia y despliega notificaciones instantáneas si falla.
         """
         if "mensaje_colision" in st.session_state:
             del st.session_state["mensaje_colision"]
@@ -287,10 +287,13 @@ else:
                     detalles = []
                     for p in transaccion["sin_stock"]:
                         detalles.append(
-                            f"• **{p['producto']}**: Solicitaste {p['pedido']} ud., pero otra persona finalizó su pedido un instante antes y agotó el stock disponible (Stock actual en sistema: {p['disponible']} ud.)."
+                            f"• **{p['producto']}**: Solicitaste {p['pedido']} ud., pero otra persona finalizó su pedido un instante antes y agotó el stock disponible (Stock actual: {p['disponible']} ud.)."
                         )
                     
                     st.session_state["mensaje_colision"] = "\n".join(detalles)
+                    
+                    # ── ¡NUEVA NOTIFICACIÓN TOAST ARRIBITA / FLOTANTE DE ERROR! ──
+                    st.toast("⚠️ Error: No se pudo enviar el pedido. ¡Se agotó el stock!", icon="❌")
                     return False
 
                 # CONTROL DE ÉXITO: El stock ya está apartado en la nube, escribimos el log de auditoría
@@ -429,6 +432,13 @@ else:
         elif st.session_state.tab_idx == 1:
             st.markdown('<div class="section-title">🛒 Carrito de Compras</div>', unsafe_allow_html=True)
 
+            # ── RENDERIZADO DE LA ALERTA ROJA FIJA ARRIBITA EN EL CARRITO ──
+            if "mensaje_colision" in st.session_state:
+                st.error("### 🚫 No se pudo enviar tu pedido por falta de existencias")
+                st.markdown(st.session_state["mensaje_colision"])
+                st.info("💡 Sugerencia: Por favor, reduce la cantidad en el selector o remueve el producto agotado para poder procesar el resto de tus artículos.")
+                st.markdown("<hr style='border-color:#E63946; margin:1.5rem 0;'>", unsafe_allow_html=True)
+
             if not st.session_state.carrito:
                 st.info("Tu carrito está vacío. Agrega productos desde el Catálogo principal.")
             else:
@@ -440,7 +450,7 @@ else:
                     s_max   = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
                     foto    = datos[COL_IMAGEN] if datos is not None and COL_IMAGEN and COL_IMAGEN in datos else ""
 
-                    # ── ADAPTACIÓN DE CONTROL DE CONCURRENCIA VISUAL (PREVIENE EL STREAMLITVALUEABOVEMAXERROR) ──
+                    # Adaptación de control de concurrencia visual in-situ
                     cantidad_guardada = int(item['cantidad'])
                     if cantidad_guardada > s_max:
                         cantidad_guardada = max(1, s_max)
@@ -489,7 +499,7 @@ else:
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Compilación y estructuración del objeto JSON/Diccionario para el envío masivo
+                # Compilación de la estructura para el envío masivo
                 lista_envio = []
                 for item in st.session_state.carrito:
                     fila = indice_productos.get(item['producto'])
@@ -505,13 +515,6 @@ else:
                         "stock_actual":    _parse_stock(fila[COL_STOCK]),
                         "empresa":         st.session_state.empresa or str(fila[COL_EMP])
                     })
-
-                # DESPLIEGUE EXPLICÍTOL DE ALERTA ROJA EN CASO DE COLISIÓN DE COMPRA SIMULTÁNEA
-                if "mensaje_colision" in st.session_state:
-                    st.error("### 🚫 No se pudo enviar tu pedido por falta de existencias")
-                    st.markdown(st.session_state["mensaje_colision"])
-                    st.info("💡 Sugerencia: Reduce la cantidad en los selectores del carrito o remueve el producto agotado para liberar y procesar los demás artículos.")
-                    st.markdown("<br>", unsafe_allow_html=True)
 
                 if st.button("REALIZAR PEDIDO", type="primary", use_container_width=True, key="btn_enviar"):
                     if lista_envio:
@@ -542,7 +545,7 @@ else:
     # Renderizar el entorno reactivo
     render_pedido()
 
-    # ── CIERRE DE SESIÓN SEGURO DE OPERARIOS ──
+    # ── CIERRE DE SESIÓN SEGURO ──
     st.markdown("<br><br>", unsafe_allow_html=True)
     if st.button("🚪 Cerrar Sesión", use_container_width=True):
         for k in ['logged_in','cod_emp','nom_emp','empresa','regional','carrito','tab_idx']:
