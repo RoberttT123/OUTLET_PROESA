@@ -110,7 +110,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 
-# ── PROCESADOR INTELIGENTE DE MATRIZ: RESPETA NÚMEROS Y REPARA FECHAS ──────
+# ── PROCESADOR SEGURO PARA TEXTO SIN FORMATO (EVITA CONVERSIONES DE FECHA) ──────
 def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
     nuevos_stocks = []
     nuevos_precios = []
@@ -122,60 +122,26 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
         val_stock = row[stock_col_name]
         val_precio = row[precio_col_name]
         
-        es_fecha_precio = hasattr(val_precio, 'strftime') or re.match(r'^\d{4}-\d{2}-\d{2}', str(val_precio).strip())
-        
+        # 1. Procesar Precio (Limpieza estricta de cadenas de texto)
         try:
-            stock_str = str(val_stock).replace(',', '').strip()
-            stock_float = float(stock_str)
+            # Quitamos "BS", espacios extras y limpiamos comas de formato visual si existieran
+            p_str = str(val_precio).upper().replace("BS", "").replace(',', '').strip()
+            precio_final = float(p_str)
         except Exception:
-            stock_float = 0.0
-
-        if es_fecha_precio:
-            if hasattr(val_precio, 'strftime'):
-                mes = val_precio.month
-                dia = val_precio.day
-            else:
-                partes = str(val_precio).strip().split('-')
-                mes = int(partes[1])
-                dia = int(partes[2])
+            precio_final = 0.0
             
-            if 0.0 < stock_float < 10.0:
-                precio_final = stock_float
-                stock_final = int(dia if dia > 5 else mes)
-            else:
-                if mes == 6 and dia == 1:
-                    precio_final = 6.01
-                elif mes == 1 and dia == 6:
-                    precio_final = 6.01
-                else:
-                    precio_final = float(f"{mes}.{dia:02d}")
+        # 2. Procesar Stock
+        try:
+            s_str = str(val_stock).strip()
+            if '.' in s_str and len(s_str.split('.')[1]) == 3:
+                s_str = s_str.replace('.', '')
+            elif ',' in s_str and len(s_str.split(',')[1]) == 3:
+                s_str = s_str.replace(',', '')
+            stock_final = int(float(s_str))
+        except Exception:
+            stock_final = 0
 
-                try:
-                    s_str = str(val_stock).strip()
-                    if '.' in s_str and len(s_str.split('.')[1]) == 3:
-                        s_str = s_str.replace('.', '')
-                    elif ',' in s_str and len(s_str.split(',')[1]) == 3:
-                        s_str = s_str.replace(',', '')
-                    stock_final = int(float(s_str))
-                except Exception:
-                    stock_final = 0
-        else:
-            try:
-                p_str = str(val_precio).upper().replace("BS", "").replace(',', '').strip()
-                precio_final = float(p_str)
-            except Exception:
-                precio_final = 0.0
-            
-            try:
-                s_str = str(val_stock).strip()
-                if '.' in s_str and len(s_str.split('.')[1]) == 3:
-                    s_str = s_str.replace('.', '')
-                elif ',' in s_str and len(s_str.split(',')[1]) == 3:
-                    s_str = s_str.replace(',', '')
-                stock_final = int(float(s_str))
-            except Exception:
-                stock_final = 0
-
+        # Control preventivo de seguridad contra desbordamientos accidentales de puntos de miles
         if precio_final >= 1000.0:
             precio_final = precio_final / 100.0
 
@@ -190,7 +156,7 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
 # ── ESCUDO 1: LEER DE LA NUBE CON CACHÉ DE TIEMPO REAL REFORZADO ──
 @st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner=False)
 def obtener_inventario_sheets_protegido(url, hoja):
-    """Descarga datos de Google Sheets pero congela el resultado 5 minutos para evitar baneos de cuota."""
+    """Descarga datos de Google Sheets congelando el resultado temporalmente para proteger las cuotas API."""
     return obtener_inventario_sheets(url, hoja)
 
 
@@ -233,9 +199,8 @@ def escribir_inventario_sheets(url_sheet: str, hoja: str, df_nuevo: pd.DataFrame
         return False
 
 
-# ── ESCUDO 2: CONTROLADOR DE PERSISTENCIA BASADO EN MEMORIA VOLATIL ──
+# ── ESCUDO 2: CONTROLADOR DE PERSISTENCIA BASADO EN MEMORIA VOLÁTIL ──
 def cargar_inventario_visto():
-    # Si ya lo tenemos en el State actual y no ha expirado, no hacemos nada
     if 'df_inventario_maestro' in st.session_state and st.session_state.df_inventario_maestro is not None:
         ts = st.session_state.get('inv_cloud_timestamp')
         if ts and (datetime.now() - ts).total_seconds() < CACHE_TTL_SEGUNDOS:
@@ -243,7 +208,6 @@ def cargar_inventario_visto():
 
     if USING_SHEETS:
         try:
-            # Consume la función con caché temporal
             df_cloud = obtener_inventario_sheets_protegido(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
             if df_cloud is not None and not df_cloud.empty:
                 st.session_state.df_inventario_maestro = df_cloud
@@ -271,7 +235,7 @@ if st.session_state.get('mostrar_toast_exito'):
     del st.session_state['mostrar_toast_exito']
 
 
-# ── CONTROL DE CARGA COMPLETA REPARADO (CON COLA DE LIMPIEZA) ──
+# ── CONTROL DE CARGA COMPLETA REPARADO ──
 st.markdown('<div class="section-title">Actualizar / Cargar Catálogo Maestro</div>', unsafe_allow_html=True)
 
 if 'uploader_version' not in st.session_state:
@@ -289,7 +253,6 @@ if archivo:
             df_sanitizado = sanitizar_matriz_inventario(df_temp.copy(), s_col_idx=3, p_col_idx=4)
             guardar_inventario_maestro(df_sanitizado)
             
-            # Guardamos inmediatamente en RAM local
             st.session_state.df_inventario_maestro = df_sanitizado
             st.session_state['inv_cloud_timestamp'] = datetime.now()
 
@@ -302,7 +265,6 @@ if archivo:
                 else:
                     st.warning("⚠️ Guardado localmente, pero falló la escritura directa en Google Sheets.")
                 
-    # Vaciamos selectivamente el caché para forzar que la siguiente lectura asimile el cambio
     st.cache_data.clear()
     status_container.empty()
     
