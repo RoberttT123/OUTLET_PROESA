@@ -65,12 +65,8 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .metric-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 0.4rem; }
 .metric-value { font-size: 2rem; font-weight: 600; color: #1A1A2E; font-family: 'DM Mono', monospace; line-height: 1; }
 .metric-sub   { font-size: 0.8rem; color: #AAA; margin-top: 0.3rem; }
-.filter-bar   { background: #FFFFFF; border-radius: 12px; padding: 1rem 1.5rem; margin-bottom: 1rem; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
 [data-testid="stDataFrame"] { border-radius: 12px !important; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
-.stSelectbox > div > div { border-radius: 8px !important; border-color: #DDD !important; background: #FAFAFA !important; }
 .info-banner  { background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 10px; padding: 0.85rem 1.2rem; color: #1D4ED8; font-size: 0.88rem; margin-top: 1rem; }
-.empresa-chip { display: inline-block; background: #F0F0F5; color: #444; border-radius: 20px; padding: 2px 10px; font-size: 0.75rem; font-weight: 500; margin: 1px; }
-[data-testid="stFileUploadDropzone"] { background: #FAFAFA !important; border: 2px dashed #C8C8D0 !important; border-radius: 12px !important; }
 .section-title { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #888; margin: 1.5rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 2px solid #EBEBEB; }
 
 /* ── Ocultar chrome de Streamlit ── */
@@ -114,7 +110,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 
-# ── NUEVO PROCESADOR FILA POR FILA CON REPARACIÓN DE CRUCE DE COLUMNAS ──────
+# ── PROCESADOR FILA POR FILA CON REPARACIÓN DE CRUCE DE COLUMNAS ──────
 def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
     nuevos_stocks = []
     nuevos_precios = []
@@ -178,9 +174,9 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
     return df
 
 
-# ── FUNCIÓN INTERNA PARA ACTUALIZAR CATÁLOGO COMPLETO EN LA NUBE ──
+# ── FUNCIÓN INTERNA OPTIMIZADA POR LOTES PARA LA NUBE ──
 def escribir_inventario_sheets(url_sheet: str, hoja: str, df_nuevo: pd.DataFrame) -> bool:
-    """Borra la hoja actual en Google Sheets y sube la nueva matriz de datos limpia."""
+    """Borra la hoja actual en Google Sheets y sube la nueva matriz en un lote rápido JSON."""
     try:
         gc = get_gsheet_connection()
         if gc is None:
@@ -189,17 +185,39 @@ def escribir_inventario_sheets(url_sheet: str, hoja: str, df_nuevo: pd.DataFrame
         spreadsheet = gc.open_by_url(url_sheet)
         worksheet = spreadsheet.worksheet(hoja)
         
-        # Preparar datos: Cabeceras + Filas convertidas a strings/números nativos
-        cabeceras = df_nuevo.columns.tolist()
-        filas = df_nuevo.fillna("").values.tolist()
+        df_copia = df_nuevo.copy()
+        
+        # Tipar estrictamente las columnas para remover objetos complejos de Pandas
+        df_copia.iloc[:, 1] = df_copia.iloc[:, 1].astype(str).str.strip()
+        df_copia.iloc[:, 3] = df_copia.iloc[:, 3].astype(int)
+        df_copia.iloc[:, 4] = df_copia.iloc[:, 4].astype(float)
+        
+        cabeceras = df_copia.columns.tolist()
+        
+        # Formatear la matriz a tipos nativos de Python estándar
+        filas = []
+        for v in df_copia.fillna("").values.tolist():
+            filas.append([str(x) if isinstance(x, (str, bool)) else x for x in v])
+            
         matriz_completa = [cabeceras] + filas
         
-        # Limpiar hoja entera de forma atómica y reescribir desde la celda A1
+        # 1. Limpiar hoja
         worksheet.clear()
-        worksheet.update('A1', matriz_completa)
+        
+        # 2. Inyección veloz por bloques mediante API v4 de Google Sheets
+        num_filas = len(matriz_completa)
+        num_columnas = len(cabeceras)
+        letra_columna = chr(64 + num_columnas)
+        rango_destino = f"A1:{letra_columna}{num_filas}"
+        
+        spreadsheet.values_update(
+            f"{hoja}!{rango_destino}",
+            params={'valueInputOption': 'USER_ENTERED'},
+            body={'values': matriz_completa}
+        )
         return True
     except Exception as e:
-        st.error(f"Error escribiendo en Google Sheets: {e}")
+        st.error(f"Error crítico escribiendo en Google Sheets: {e}")
         return False
 
 
@@ -240,23 +258,18 @@ st.markdown('<div class="section-title">Actualizar / Cargar Catálogo Maestro</d
 archivo = st.file_uploader("Sube el Excel de inventario del mes (Hoja1) para reescribir la base local y Google Sheets:", type=["xlsx"], label_visibility="collapsed")
 
 if archivo:
-    with st.spinner("Procesando y reparando matriz de datos Excel..."):
-        # 1. Leer archivo crudo subido por el usuario
+    # Contenedores anidados individuales para que los spinners se abran y cierren limpiamente
+    with st.spinner("Procesando y reparando matriz de datos Excel... ⚙️"):
         df_temp = cargar_inventario(archivo)
-        
-        # 2. Aplicar el limpiador de desvíos de formatos de Excel inmediatamente
         df_sanitizado = sanitizar_matriz_inventario(df_temp.copy(), s_col_idx=3, p_col_idx=4)
-        
-        # 3. Guardar copia limpia de respaldo en la máquina local
         guardar_inventario_maestro(df_sanitizado)
         st.session_state.df_inventario_maestro = df_sanitizado
 
-    # 4. Enviar los nuevos productos limpios en lote hacia la nube
     if USING_SHEETS:
         with st.spinner("🚀 Sincronizando nuevo catálogo con Google Sheets en la nube..."):
             exito_nube = escribir_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME, df_sanitizado)
             if exito_nube:
-                st.success("✅ ¡Nube Sincronizada! Productos, precios y stocks actualizados globalmente.")
+                st.toast("¡Nube Sincronizada correctamente!", icon="✅")
             else:
                 st.warning("⚠️ Guardado localmente, pero falló la escritura directa en Google Sheets.")
                 
