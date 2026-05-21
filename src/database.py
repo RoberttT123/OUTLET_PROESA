@@ -23,14 +23,24 @@ def limpiar_formato_latino(valor):
     return valor
 
 def cargar_inventario(archivo):
-    """Lee el Excel inicial y limpia los formatos de número."""
-    df = pd.read_excel(archivo, sheet_name="Inventario")    
-    df.iloc[:, 3] = df.iloc[:, 3].apply(limpiar_formato_latino)
-    df.iloc[:, 3] = pd.to_numeric(df.iloc[:, 3], errors='coerce').fillna(0)
+    """
+    Carga el archivo Excel subido, asegurando que los tipos de datos
+    no rompan la estructura interna de Pandas al recibir columnas de texto.
+    """
+    import pandas as pd
     
-    df.iloc[:, 4] = df.iloc[:, 4].apply(limpiar_formato_latino)
-    df.iloc[:, 4] = pd.to_numeric(df.iloc[:, 4], errors='coerce').fillna(0)
+    # 1. Leer el archivo Excel manteniendo el formato de origen
+    df = pd.read_excel(archivo, sheet_name=0)
     
+    # Aseguramos que el DataFrame tenga suficientes columnas antes de operar
+    if df.shape[1] > 4:
+        # Forzamos la columna de stock (posición 3) a numérico de forma segura
+        df.iloc[:, 3] = pd.to_numeric(df.iloc[:, 3], errors='coerce').fillna(0).astype(int)
+        
+        # SOLUCIÓN AL ERROR: Convertimos la columna de precio a tipo 'object' o 'float' 
+        # usando .astype() para que Pandas acepte la asignación de datos mezclados/texto
+        df.iloc[:, 4] = pd.to_numeric(df.iloc[:, 4], errors='coerce').fillna(0.0)
+        
     return df
 
 def guardar_inventario_maestro(df):
