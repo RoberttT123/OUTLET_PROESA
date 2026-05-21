@@ -253,29 +253,41 @@ df_inv = st.session_state.df_inventario_maestro
 render_nav(active_page='inicio', inventario_df=df_inv)
 
 
-# ── CONTROL DE CARGA COMPLETA (LOCAL + REPLICA A LA NUBE) ──
+# ── CONTROL DE CARGA COMPLETA (LOCAL + REPLICA A LA NUBE OPTIMIZADA) ──
 st.markdown('<div class="section-title">Actualizar / Cargar Catálogo Maestro</div>', unsafe_allow_html=True)
 archivo = st.file_uploader("Sube el Excel de inventario del mes (Hoja1) para reescribir la base local y Google Sheets:", type=["xlsx"], label_visibility="collapsed")
 
 if archivo:
-    # Contenedores anidados individuales para que los spinners se abran y cierren limpiamente
-    with st.spinner("Procesando y reparando matriz de datos Excel... ⚙️"):
-        df_temp = cargar_inventario(archivo)
-        df_sanitizado = sanitizar_matriz_inventario(df_temp.copy(), s_col_idx=3, p_col_idx=4)
-        guardar_inventario_maestro(df_sanitizado)
-        st.session_state.df_inventario_maestro = df_sanitizado
+    # Contenedor dinámico exclusivo para que los spinners no dejen rastros colgados
+    status_container = st.empty()
+    
+    with status_container.container():
+        with st.spinner("Procesando y reparando matriz de datos Excel... ⚙️"):
+            df_temp = cargar_inventario(archivo)
+            df_sanitizado = sanitizar_matriz_inventario(df_temp.copy(), s_col_idx=3, p_col_idx=4)
+            guardar_inventario_maestro(df_sanitizado)
+            
+            # Forzamos la carga directa en memoria RAM para el ciclo entrante
+            st.session_state.df_inventario_maestro = df_sanitizado
+            st.session_state['inv_cloud_timestamp'] = datetime.now()
 
     if USING_SHEETS:
-        with st.spinner("🚀 Sincronizando nuevo catálogo con Google Sheets en la nube..."):
-            exito_nube = escribir_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME, df_sanitizado)
-            if exito_nube:
-                st.toast("¡Nube Sincronizada correctamente!", icon="✅")
-            else:
-                st.warning("⚠️ Guardado localmente, pero falló la escritura directa en Google Sheets.")
+        with status_container.container():
+            with st.spinner("🚀 Sincronizando nuevo catálogo con Google Sheets en la nube..."):
+                exito_nube = escribir_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME, df_sanitizado)
+                if exito_nube:
+                    st.toast("¡Nube Sincronizada correctamente!", icon="✅")
+                else:
+                    st.warning("⚠️ Guardado localmente, pero falló la escritura directa en Google Sheets.")
                 
+    # Purgamos cachés antiguos de consultas
     st.cache_data.clear()
-    st.session_state['inv_cloud_timestamp'] = datetime.now()
+    
+    # Destruimos visualmente el spinner del navegador
+    status_container.empty()
     st.success("💥 ¡Catálogo maestro actualizado con éxito!")
+    
+    # Recarga total limpia de controles
     st.rerun()
 
 if df_inv is None:
