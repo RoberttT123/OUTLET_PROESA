@@ -104,7 +104,7 @@ st.markdown(f"""
     <div>
         <h1>Outlet PROESA</h1>
         <p>Panel de Control e Inventario</p>
-        <span class="hero-badge">SISTEMA EN VIVO</span>
+        <span class="hero-badge">SISTEMA</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -253,10 +253,16 @@ df_inv = st.session_state.df_inventario_maestro
 render_nav(active_page='inicio', inventario_df=df_inv)
 
 
+# ── DISPARADOR POST-RERUN DE NOTIFICACIONES FLOTANTES EXITOSAS ──
+if st.session_state.get('mostrar_toast_exito'):
+    st.toast("🚀 ¡Catálogo y Google Sheets sincronizados con éxito!", icon="✅")
+    # Lo apagamos inmediatamente de la memoria para que no vuelva a saltar si el usuario hace clics en la tabla
+    del st.session_state['mostrar_toast_exito']
+
+
 # ── CONTROL DE CARGA COMPLETA REPARADO (CON COLA DE LIMPIEZA) ──
 st.markdown('<div class="section-title">Actualizar / Cargar Catálogo Maestro</div>', unsafe_allow_html=True)
 
-# Generamos un ID dinámico basado en un contador interno para obligar al componente a reiniciarse a cero tras guardar
 if 'uploader_version' not in st.session_state:
     st.session_state.uploader_version = 0
 
@@ -272,7 +278,6 @@ if archivo:
             df_sanitizado = sanitizar_matriz_inventario(df_temp.copy(), s_col_idx=3, p_col_idx=4)
             guardar_inventario_maestro(df_sanitizado)
             
-            # Fijamos en el estado de la sesión para evitar llamadas HTTP de lectura redundantes
             st.session_state.df_inventario_maestro = df_sanitizado
             st.session_state['inv_cloud_timestamp'] = datetime.now()
 
@@ -281,18 +286,15 @@ if archivo:
             with st.spinner("🚀 Sincronizando nuevo catálogo con Google Sheets en la nube..."):
                 exito_nube = escribir_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME, df_sanitizado)
                 if exito_nube:
-                    st.toast("¡Nube Sincronizada correctamente!", icon="✅")
+                    # Guardamos la bandera en memoria para que se renderice AL VOLVER de la recarga
+                    st.session_state.mostrar_toast_exito = True
                 else:
                     st.warning("⚠️ Guardado localmente, pero falló la escritura directa en Google Sheets.")
                 
     st.cache_data.clear()
     status_container.empty()
     
-    # PASO CRÍTICO MÁGICO: Cambiamos el ID del cargador de archivos. Al hacer esto, 
-    # Streamlit destruye el componente viejo que tenía el Excel retenido y crea uno vacío.
     st.session_state.uploader_version += 1
-    
-    st.success("💥 ¡Catálogo maestro actualizado con éxito!")
     st.rerun()
 
 if df_inv is None:
