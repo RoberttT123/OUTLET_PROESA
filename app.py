@@ -124,10 +124,40 @@ stock_col   = df_inv.columns[3]
 precio_col  = df_inv.columns[4]
 empresa_col = df_inv.columns[5]
 
+
+# ── CORRECCIÓN INTEGRAL DE ESCALA PARA EL PRECIO UNITARIO DEL EXCEL ──────────
+def corregir_escala_precio(valor_str):
+    if pd.isna(valor_str) or str(valor_str).strip() == "":
+        return 0.0
+    try:
+        texto = str(valor_str).strip()
+        
+        # Si ya viene explícitamente formateado con su punto o coma decimal, lo respetamos
+        if '.' in texto or ',' in texto:
+            limpio = texto.replace(',', '.')
+            return float(limpio)
+        
+        # Si viene un bloque numérico puro sin separadores (ej: "1853")
+        num = float(texto)
+        if num == 0:
+            return 0.0
+            
+        # Si el entero plano es muy grande, recorremos la coma dos posiciones a la izquierda
+        if num >= 1000:
+            return num / 100.0
+            
+        return num
+    except ValueError:
+        return 0.0
+
+# Aplicamos la normalización de precios antes de computar métricas y dibujar la tabla
+df_inv[precio_col] = df_inv[precio_col].apply(corregir_escala_precio)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 total_prods = len(df_inv)
 total_stock = int(pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0).sum())
-valor_total = pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0).mul(
-              pd.to_numeric(df_inv[precio_col], errors='coerce').fillna(0)).sum()
+valor_total = pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0).mul(df_inv[precio_col]).sum()
 sin_stock   = int((pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0) <= 0).sum())
 n_empresas  = df_inv[empresa_col].nunique()
 
@@ -157,7 +187,7 @@ with col4:
     st.markdown(f"""
     <div class="metric-card amber">
         <div class="metric-label">Valor Inventario</div>
-        <div class="metric-value">Bs {valor_total:,.0f}</div>
+        <div class="metric-value">Bs {valor_total:,.2f}</div>
         <div class="metric-sub">en {n_empresas} empresas</div>
     </div>""", unsafe_allow_html=True)
 
