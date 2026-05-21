@@ -1,10 +1,25 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import os
 import base64
 import re
-from src.database import cargar_inventario, guardar_inventario_maestro
-from src.nav import render_nav
+from datetime import datetime
+
+# Intentamos importar la configuración y conectores de la nube
+try:
+    from config import INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME
+    from src.sheets import obtener_inventario_sheets, get_gsheet_connection
+    USING_SHEETS = True
+except ImportError:
+    USING_SHEETS = False
+
+try:
+    from src.database import cargar_inventario, guardar_inventario_maestro
+    from src.nav import render_nav
+except ImportError as e:
+    st.error(f"❌ Error crítico de configuración: {e}")
+    st.stop()
 
 st.set_page_config(
     page_title="Outlet PROESA",
@@ -14,6 +29,7 @@ st.set_page_config(
 )
 
 PATH_INV_SISTEMA = "data/inventario_maestro.xlsx"
+CACHE_TTL_SEGUNDOS = 300  # Los datos dinámicos de la nube se refrescan cada 5 minutos
 
 st.markdown("""
 <style>
@@ -92,64 +108,34 @@ st.markdown(f"""
     <div>
         <h1>Outlet PROESA</h1>
         <p>Panel de Control e Inventario</p>
-        <span class="hero-badge">SISTEMA ACTIVO</span>
+        <span class="hero-badge">SISTEMA EN VIVO</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-if 'df_inventario_maestro' not in st.session_state:
-    if os.path.exists(PATH_INV_SISTEMA):
-        st.session_state.df_inventario_maestro = pd.read_excel(PATH_INV_SISTEMA)
-    else:
-        st.session_state.df_inventario_maestro = None
-
-df_inv = st.session_state.df_inventario_maestro
-
-render_nav(active_page='inicio', inventario_df=df_inv)
-
-if df_inv is None:
-    st.warning("⚠️ No se ha detectado el Inventario Maestro.")
-    st.markdown('<div class="section-title">Cargar Excel del mes</div>', unsafe_allow_html=True)
-    archivo = st.file_uploader("Sube el Excel del mes (Hoja1)", type=["xlsx"], label_visibility="collapsed")
-    if archivo:
-        df_temp = cargar_inventario(archivo)
-        guardar_inventario_maestro(df_temp)
-        st.session_state.df_inventario_maestro = df_temp
-        st.success("✅ Inventario cargado con éxito.")
-        st.rerun()
-    st.stop()
-
-
-stock_col   = df_inv.columns[3]
-precio_col  = df_inv.columns[4]
-empresa_col = df_inv.columns[5]
-
-
 # ── NUEVO PROCESADOR FILA POR FILA CON REPARACIÓN DE CRUCE DE COLUMNAS ──────
-def sanitizar_matriz_inventario(df):
+def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
     nuevos_stocks = []
     nuevos_precios = []
     
+    stock_col_name = df.columns[s_col_idx]
+    precio_col_name = df.columns[p_col_idx]
+    
     for idx, row in df.iterrows():
-        val_stock = row[stock_col]
-        val_precio = row[precio_col]
+        val_stock = row[stock_col_name]
+        val_precio = row[precio_col_name]
         
-        # Detectar si el precio viene como un objeto de fecha o string con guiones
         es_fecha_precio = hasattr(val_precio, 'strftime') or re.match(r'^\d{4}-\d{2}-\d{2}', str(val_precio).strip())
         
         try:
-            # Evaluar el stock crudo
             stock_str = str(val_stock).replace(',', '').strip()
             stock_float = float(stock_str)
         except Exception:
             stock_float = 0.0
 
-        # CASO CRÍTICO: Las columnas se cruzaron (Ej: Stock=2.548 y Precio=2026-06-05)
         if es_fecha_precio and (0.0 < stock_float < 10.0):
-            # El "stock" era en realidad el precio real (ej: 2.548 -> Bs 2.55)
             precio_final = stock_float
-            # El stock real quedó atrapado en el día o mes de la fecha corrupta
             if hasattr(val_precio, 'strftime'):
                 stock_final = int(val_precio.day if val_precio.day > 5 else val_precio.month)
             else:
@@ -158,8 +144,6 @@ def sanitizar_matriz_inventario(df):
                 m = int(partes[1])
                 stock_final = int(d if d > 5 else m)
         else:
-            # Caso Normal: Las columnas están en su posición correcta
-            # 1. Limpiar Precio
             if es_fecha_precio:
                 if hasattr(val_precio, 'strftime'):
                     precio_final = float(f"{val_precio.month}.{val_precio.day:02d}")
@@ -173,10 +157,8 @@ def sanitizar_matriz_inventario(df):
                 except Exception:
                     precio_final = 0.0
             
-            # 2. Limpiar Stock
             try:
                 s_str = str(val_stock).strip()
-                # Si el stock viene con un punto de miles corrupto (ej: "3.129" de 3 mil unidades)
                 if '.' in s_str and len(s_str.split('.')[1]) == 3:
                     s_str = s_str.replace('.', '')
                 elif ',' in s_str and len(s_str.split(',')[1]) == 3:
@@ -185,27 +167,124 @@ def sanitizar_matriz_inventario(df):
             except Exception:
                 stock_final = 0
 
-        # Control de magnitud por si algún precio quedó guardado como entero (ej: 1853 -> 18.53)
         if precio_final >= 1000.0:
             precio_final = precio_final / 100.0
 
         nuevos_stocks.append(stock_final)
         nuevos_precios.append(precio_final)
         
-    df[stock_col] = nuevos_stocks
-    df[precio_col] = nuevos_precios
+    df[stock_col_name] = nuevos_stocks
+    df[precio_col_name] = nuevos_precios
     return df
 
-# Ejecutamos la reparación inteligente sobre los datos cargados en memoria
-df_inv = sanitizar_matriz_inventario(df_inv)
-# ─────────────────────────────────────────────────────────────────────────────
+
+# ── FUNCIÓN INTERNA PARA ACTUALIZAR CATÁLOGO COMPLETO EN LA NUBE ──
+def escribir_inventario_sheets(url_sheet: str, hoja: str, df_nuevo: pd.DataFrame) -> bool:
+    """Borra la hoja actual en Google Sheets y sube la nueva matriz de datos limpia."""
+    try:
+        gc = get_gsheet_connection()
+        if gc is None:
+            return False
+        
+        spreadsheet = gc.open_by_url(url_sheet)
+        worksheet = spreadsheet.worksheet(hoja)
+        
+        # Preparar datos: Cabeceras + Filas convertidas a strings/números nativos
+        cabeceras = df_nuevo.columns.tolist()
+        filas = df_nuevo.fillna("").values.tolist()
+        matriz_completa = [cabeceras] + filas
+        
+        # Limpiar hoja entera de forma atómica y reescribir desde la celda A1
+        worksheet.clear()
+        worksheet.update('A1', matriz_completa)
+        return True
+    except Exception as e:
+        st.error(f"Error escribiendo en Google Sheets: {e}")
+        return False
 
 
+# ── CONTROLADOR DE PERSISTENCIA Y CACHÉ OPERATIVA ──
+def _inventario_expirado() -> bool:
+    ts = st.session_state.get('inv_cloud_timestamp')
+    if ts is None:
+        return True
+    return (datetime.now() - ts).total_seconds() > CACHE_TTL_SEGUNDOS
+
+def cargar_inventario_visto():
+    if USING_SHEETS:
+        try:
+            df_cloud = obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
+            if not df_cloud.empty:
+                st.session_state.df_inventario_maestro = df_cloud
+                st.session_state['inv_cloud_timestamp'] = datetime.now()
+                return
+        except Exception:
+            pass
+            
+    if os.path.exists(PATH_INV_SISTEMA):
+        st.session_state.df_inventario_maestro = pd.read_excel(PATH_INV_SISTEMA)
+        st.session_state['inv_cloud_timestamp'] = datetime.now()
+    else:
+        st.session_state.df_inventario_maestro = None
+
+if 'df_inventario_maestro' not in st.session_state or _inventario_expirado():
+    cargar_inventario_visto()
+
+df_inv = st.session_state.df_inventario_maestro
+
+render_nav(active_page='inicio', inventario_df=df_inv)
+
+
+# ── CONTROL DE CARGA COMPLETA (LOCAL + REPLICA A LA NUBE) ──
+st.markdown('<div class="section-title">Actualizar / Cargar Catálogo Maestro</div>', unsafe_allow_html=True)
+archivo = st.file_uploader("Sube el Excel de inventario del mes (Hoja1) para reescribir la base local y Google Sheets:", type=["xlsx"], label_visibility="collapsed")
+
+if archivo:
+    with st.spinner("Procesando y reparando matriz de datos Excel..."):
+        # 1. Leer archivo crudo subido por el usuario
+        df_temp = cargar_inventario(archivo)
+        
+        # 2. Aplicar el limpiador de desvíos de formatos de Excel inmediatamente
+        df_sanitizado = sanitizar_matriz_inventario(df_temp.copy(), s_col_idx=3, p_col_idx=4)
+        
+        # 3. Guardar copia limpia de respaldo en la máquina local
+        guardar_inventario_maestro(df_sanitizado)
+        st.session_state.df_inventario_maestro = df_sanitizado
+
+    # 4. Enviar los nuevos productos limpios en lote hacia la nube
+    if USING_SHEETS:
+        with st.spinner("🚀 Sincronizando nuevo catálogo con Google Sheets en la nube..."):
+            exito_nube = escribir_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME, df_sanitizado)
+            if exito_nube:
+                st.success("✅ ¡Nube Sincronizada! Productos, precios y stocks actualizados globalmente.")
+            else:
+                st.warning("⚠️ Guardado localmente, pero falló la escritura directa en Google Sheets.")
+                
+    st.cache_data.clear()
+    st.session_state['inv_cloud_timestamp'] = datetime.now()
+    st.success("💥 ¡Catálogo maestro actualizado con éxito!")
+    st.rerun()
+
+if df_inv is None:
+    st.warning("⚠️ No se ha detectado el Inventario Maestro. Por favor sube un archivo Excel para iniciar.")
+    st.stop()
+
+
+# Identificación de columnas operativas
+stock_col   = df_inv.columns[3]
+precio_col  = df_inv.columns[4]
+empresa_col = df_inv.columns[5]
+
+# Sanitización preventiva en caliente sobre los datos cargados en memoria
+df_inv = sanitizar_matriz_inventario(df_inv, s_col_idx=3, p_col_idx=4)
+
+
+# Cálculo dinámico de métricas consolidadas
 total_prods = len(df_inv)
-total_stock = int(df_inv[stock_col].sum())
-valor_total = df_inv[stock_col].mul(df_inv[precio_col]).sum()
-sin_stock   = int((df_inv[stock_col] <= 0).sum())
-n_empresas  = df_inv[empresa_col].nunique()
+total_stock = int(pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0).sum())
+valor_total = (pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0) * pd.to_numeric(df_inv[precio_col], errors='coerce').fillna(0.0)).sum()
+sin_stock   = int((pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0) <= 0).sum())
+n_empresas  = df_inv[empresa_col].nunique() if empresa_col in df_inv.columns else 1
 
 col1, col2, col3, col4 = st.columns(4)
 with col1:
@@ -243,20 +322,28 @@ st.markdown('<div class="section-title">🔍 Catálogo de Productos</div>', unsa
 
 col_filtro, col_busqueda = st.columns([1, 2])
 with col_filtro:
-    empresas = ["Todas"] + sorted(df_inv[empresa_col].dropna().unique().tolist())
-    filtro   = st.selectbox("Empresa", empresas, label_visibility="collapsed")
+    opciones_emp = ["Todas"]
+    if empresa_col in df_inv.columns:
+        opciones_emp += sorted(df_inv[empresa_col].dropna().unique().tolist())
+    filtro = st.selectbox("Empresa", opciones_emp, label_visibility="collapsed")
 with col_busqueda:
-    busqueda = st.text_input("Buscar producto...", placeholder="Escribe para filtrar por nombre...", label_visibility="collapsed")
+    busqueda = st.text_input("Buscar producto...", placeholder="Escribe para filtrar por nombre o código...", label_visibility="collapsed")
 
 df_mostrar = df_inv.copy()
-if filtro != "Todas":
+if filtro != "Todas" and empresa_col in df_mostrar.columns:
     df_mostrar = df_mostrar[df_mostrar[empresa_col] == filtro]
 if busqueda:
     nombre_col = df_inv.columns[2]
-    df_mostrar = df_mostrar[df_mostrar[nombre_col].str.contains(busqueda, case=False, na=False)]
+    cod_col = df_inv.columns[1]
+    mascara = df_mostrar[nombre_col].astype(str).str.contains(busqueda, case=False, na=False)
+    mascara |= df_mostrar[cod_col].astype(str).str.contains(busqueda, case=False, na=False)
+    df_mostrar = df_mostrar[mascara]
 
 def resaltar_stock(row):
-    stock = row.iloc[3]
+    try:
+        stock = float(row.iloc[3])
+    except Exception:
+        stock = 0
     if stock <= 0:
         return ['background-color: #FEE2E2'] * len(row)
     elif stock <= 5:
@@ -272,9 +359,12 @@ try:
 except Exception:
     st.dataframe(df_mostrar, use_container_width=True, height=420)
 
+ts_label = st.session_state.get('inv_cloud_timestamp')
+ts_str = ts_label.strftime("%H:%M:%S") if ts_label else "Ahora"
+
 st.markdown(f"""
 <div class="info-banner">
-    📊 Mostrando <strong>{len(df_mostrar)}</strong> de <strong>{total_prods}</strong> productos.
+    📊 Mostrando <strong>{len(df_mostrar)}</strong> de <strong>{total_prods}</strong> productos (Sincronizado con la nube: {ts_str}).
     Las filas en <span style="background:#FEE2E2;padding:1px 5px;border-radius:3px">rojo</span> indican stock agotado,
     en <span style="background:#FEF9C3;padding:1px 5px;border-radius:3px">amarillo</span> stock bajo (≤5 unidades).
     👉 Ve a <strong>Registro</strong> en el menú lateral para ingresar pedidos.
