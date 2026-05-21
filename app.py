@@ -253,12 +253,17 @@ df_inv = st.session_state.df_inventario_maestro
 render_nav(active_page='inicio', inventario_df=df_inv)
 
 
-# ── CONTROL DE CARGA COMPLETA (LOCAL + REPLICA A LA NUBE OPTIMIZADA) ──
+# ── CONTROL DE CARGA COMPLETA REPARADO (CON COLA DE LIMPIEZA) ──
 st.markdown('<div class="section-title">Actualizar / Cargar Catálogo Maestro</div>', unsafe_allow_html=True)
-archivo = st.file_uploader("Sube el Excel de inventario del mes (Hoja1) para reescribir la base local y Google Sheets:", type=["xlsx"], label_visibility="collapsed")
+
+# Generamos un ID dinámico basado en un contador interno para obligar al componente a reiniciarse a cero tras guardar
+if 'uploader_version' not in st.session_state:
+    st.session_state.uploader_version = 0
+
+id_uploader = f"excel_uploader_{st.session_state.uploader_version}"
+archivo = st.file_uploader("Sube el Excel de inventario del mes (Hoja1) para reescribir la base local y Google Sheets:", type=["xlsx"], label_visibility="collapsed", key=id_uploader)
 
 if archivo:
-    # Contenedor dinámico exclusivo para que los spinners no dejen rastros colgados
     status_container = st.empty()
     
     with status_container.container():
@@ -267,7 +272,7 @@ if archivo:
             df_sanitizado = sanitizar_matriz_inventario(df_temp.copy(), s_col_idx=3, p_col_idx=4)
             guardar_inventario_maestro(df_sanitizado)
             
-            # Forzamos la carga directa en memoria RAM para el ciclo entrante
+            # Fijamos en el estado de la sesión para evitar llamadas HTTP de lectura redundantes
             st.session_state.df_inventario_maestro = df_sanitizado
             st.session_state['inv_cloud_timestamp'] = datetime.now()
 
@@ -280,14 +285,14 @@ if archivo:
                 else:
                     st.warning("⚠️ Guardado localmente, pero falló la escritura directa en Google Sheets.")
                 
-    # Purgamos cachés antiguos de consultas
     st.cache_data.clear()
-    
-    # Destruimos visualmente el spinner del navegador
     status_container.empty()
-    st.success("💥 ¡Catálogo maestro actualizado con éxito!")
     
-    # Recarga total limpia de controles
+    # PASO CRÍTICO MÁGICO: Cambiamos el ID del cargador de archivos. Al hacer esto, 
+    # Streamlit destruye el componente viejo que tenía el Excel retenido y crea uno vacío.
+    st.session_state.uploader_version += 1
+    
+    st.success("💥 ¡Catálogo maestro actualizado con éxito!")
     st.rerun()
 
 if df_inv is None:
