@@ -104,13 +104,13 @@ st.markdown(f"""
     <div>
         <h1>Outlet PROESA</h1>
         <p>Panel de Control e Inventario</p>
-        <span class="hero-badge">SISTEMA</span>
+        <span class="hero-badge">SISTEMA EN VIVO</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ── PROCESADOR FILA POR FILA CON REPARACIÓN DE CRUCE DE COLUMNAS ──────
+# ── PROCESADOR INTELIGENTE DE MATRIZ: RESPETA NÚMEROS Y REPARA FECHAS ──────
 def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
     nuevos_stocks = []
     nuevos_precios = []
@@ -122,6 +122,7 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
         val_stock = row[stock_col_name]
         val_precio = row[precio_col_name]
         
+        # 1. Identificar si el valor ya es una fecha o un string con guiones de fecha (ej: 2026-06-01)
         es_fecha_precio = hasattr(val_precio, 'strftime') or re.match(r'^\d{4}-\d{2}-\d{2}', str(val_precio).strip())
         
         try:
@@ -130,28 +131,47 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
         except Exception:
             stock_float = 0.0
 
-        if es_fecha_precio and (0.0 < stock_float < 10.0):
-            precio_final = stock_float
+        # CASO A: El precio fue corrompido por Excel y se volvió una FECHA
+        if es_fecha_precio:
             if hasattr(val_precio, 'strftime'):
-                stock_final = int(val_precio.day if val_precio.day > 5 else val_precio.month)
+                mes = val_precio.month
+                dia = val_precio.day
             else:
                 partes = str(val_precio).strip().split('-')
-                d = int(partes[2])
-                m = int(partes[1])
-                stock_final = int(d if d > 5 else m)
-        else:
-            if es_fecha_precio:
-                if hasattr(val_precio, 'strftime'):
-                    precio_final = float(f"{val_precio.month}.{val_precio.day:02d}")
-                else:
-                    partes = str(val_precio).strip().split('-')
-                    precio_final = float(f"{int(partes[1])}.{int(partes[2]):02d}")
+                mes = int(partes[1])
+                dia = int(partes[2])
+            
+            # Sub-caso A1: Cruce de columnas real (Stock atrapado en la fecha, Precio en el stock)
+            if 0.0 < stock_float < 10.0:
+                precio_final = stock_float
+                stock_final = int(dia if dia > 5 else mes)
+            
+            # Sub-caso A2: El precio original era un decimal como "06.01" o "12.30" y Excel lo volvió fecha
             else:
+                if mes == 6 and dia == 1:    # Se volvió 1 de Junio -> Originalmente era 6.01
+                    precio_final = 6.01
+                elif mes == 1 and dia == 6:  # Se volvió 6 de Enero -> Originalmente era 6.01
+                    precio_final = 6.01
+                else:
+                    precio_final = float(f"{mes}.{dia:02d}")
+
                 try:
-                    p_str = str(val_precio).upper().replace("BS", "").replace(',', '').strip()
-                    precio_final = float(p_str)
+                    s_str = str(val_stock).strip()
+                    if '.' in s_str and len(s_str.split('.')[1]) == 3:
+                        s_str = s_str.replace('.', '')
+                    elif ',' in s_str and len(s_str.split(',')[1]) == 3:
+                        s_str = s_str.replace(',', '')
+                    stock_final = int(float(s_str))
                 except Exception:
-                    precio_final = 0.0
+                    stock_final = 0
+
+        # CASO B: El precio está PERFECTO en el Excel (es un número estándar como 32.43)
+        else:
+            try:
+                p_str = str(val_precio).upper().replace("BS", "").replace(',', '').strip()
+                precio_final = float(p_str)
+            except Exception:
+                precio_final = 0.0
             
             try:
                 s_str = str(val_stock).strip()
@@ -163,6 +183,7 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
             except Exception:
                 stock_final = 0
 
+        # Control de seguridad para precios inflados accidentalmente por puntos de miles
         if precio_final >= 1000.0:
             precio_final = precio_final / 100.0
 
@@ -256,7 +277,6 @@ render_nav(active_page='inicio', inventario_df=df_inv)
 # ── DISPARADOR POST-RERUN DE NOTIFICACIONES FLOTANTES EXITOSAS ──
 if st.session_state.get('mostrar_toast_exito'):
     st.toast("🚀 ¡Catálogo y Google Sheets sincronizados con éxito!", icon="✅")
-    # Lo apagamos inmediatamente de la memoria para que no vuelva a saltar si el usuario hace clics en la tabla
     del st.session_state['mostrar_toast_exito']
 
 
@@ -286,7 +306,6 @@ if archivo:
             with st.spinner("🚀 Sincronizando nuevo catálogo con Google Sheets en la nube..."):
                 exito_nube = escribir_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME, df_sanitizado)
                 if exito_nube:
-                    # Guardamos la bandera en memoria para que se renderice AL VOLVER de la recarga
                     st.session_state.mostrar_toast_exito = True
                 else:
                     st.warning("⚠️ Guardado localmente, pero falló la escritura directa en Google Sheets.")
