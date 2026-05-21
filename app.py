@@ -57,7 +57,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 [data-testid="stFileUploadDropzone"] { background: #FAFAFA !important; border: 2px dashed #C8C8D0 !important; border-radius: 12px !important; }
 .section-title { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #888; margin: 1.5rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 2px solid #EBEBEB; }
 
-/* ── Ocultar chrome de Streamlit SIN dejar barra blanca ── */
+/* ── Ocultar chrome de Streamlit ── */
 #MainMenu, footer { visibility: hidden; }
 header {
     visibility: hidden;
@@ -126,33 +126,44 @@ precio_col  = df_inv.columns[4]
 empresa_col = df_inv.columns[5]
 
 
-# ── NUEVA FUNCIÓN DE NORMALIZACIÓN ULTRA ROBUSTA PARA EVITAR DEFAULTS DE EXCEL ──
-def corregir_escala_precio_definitivo(valor):
+# ── NUEVA FUNCIÓN SANITIZADORA ANTI AUTO-FECHAS DE EXCEL ──
+def corregir_escala_y_fechas_precio(valor):
     if pd.isna(valor):
         return 0.0
+    
+    # Si viene directamente como un objeto datetime de pandas/excel
+    if hasattr(valor, 'strftime'):
+        # Extraemos mes y día (Ej: de 2026-06-05 extrae día 5 y mes 6 -> 5.06 o 6.05)
+        # Dado que los precios del outlet suelen ser menores a 13 en estos productos, evaluamos:
+        dia = valor.day
+        mes = valor.month
+        # Retornamos una reconstrucción lógica aproximada para revertir el daño de Excel
+        return float(f"{mes}.{dia:02d}")
+
     try:
-        # Convertimos a string y eliminamos cualquier símbolo de moneda "Bs" o espacios raros
         texto = str(valor).upper().replace("BS", "").strip()
         
-        # Caso 1: Tiene comas y puntos a la vez (ej: "1,853.00" o "1.853,00")
+        # Si el string tiene formato de fecha (Ej: "2026-06-05")
+        if re.match(r'^\d{4}-\d{2}-\d{2}', texto):
+            partes_fecha = texto.split('-')
+            mes = int(partes_fecha[1])
+            dia = int(partes_fecha[2])
+            return float(f"{mes}.{dia:02d}")
+
+        # Caso 1: Tiene comas y puntos a la vez (ej: "1,853.00")
         if (',' in texto) and ('.' in texto):
-            # Identificamos cuál es el separador decimal real (el último símbolo)
             if texto.find(',') > texto.find('.'):
-                # La coma es el decimal (ej: 1.853,20) -> removemos puntos y cambiamos coma por punto
                 texto = texto.replace('.', '').replace(',', '.')
             else:
-                # El punto es el decimal (ej: 1,853.20) -> removemos comas
                 texto = texto.replace(',', '')
             return float(texto)
             
         # Caso 2: Solo tiene comas (ej: "18,53")
         elif ',' in texto:
-            # Si solo hay una coma y está a 2 dígitos del final, es decimal fijo boliviano
             partes = texto.split(',')
             if len(partes) == 2 and len(partes[1]) == 2:
                 return float(texto.replace(',', '.'))
             else:
-                # De lo contrario es separador de miles corrupto sin decimales
                 texto = texto.replace(',', '')
                 
         # Caso 3: Solo tiene puntos (ej: "18.53")
@@ -163,14 +174,7 @@ def corregir_escala_precio_definitivo(valor):
             else:
                 texto = texto.replace('.', '')
 
-        # Conversión final del bloque limpio
         num = float(texto)
-        if num == 0:
-            return 0.0
-            
-        # LÓGICA DE CONTROL DE MAGNITUD FINAL:
-        # Si quedó guardado como un entero gigante sin decimales (ej: 1853 o 18530)
-        # y sabemos que pertenece a un ítem unitario del outlet, reposicionamos la coma
         if num >= 1000.0:
             return num / 100.0
             
@@ -178,15 +182,35 @@ def corregir_escala_precio_definitivo(valor):
     except Exception:
         return 0.0
 
-# Aplicamos la limpieza transaccional directo a la columna del dataframe maestro
-df_inv[precio_col] = df_inv[precio_col].apply(corregir_escala_precio_definitivo)
+def limpiar_stock_fechas(valor):
+    if pd.isna(valor):
+        return 0
+    # Si por error Excel guardó el stock como fecha
+    if hasattr(valor, 'strftime'):
+        return int(valor.day)
+    try:
+        texto = str(valor).strip()
+        if re.match(r'^\d{4}-\d{2}-\d{2}', texto):
+            return int(texto.split('-')[2])
+        # Limpieza estándar de separador de miles si viene como string ("3.129")
+        if '.' in texto and len(texto.split('.')[1]) == 3:
+            texto = texto.replace('.', '')
+        elif ',' in texto and len(texto.split(',')[1]) == 3:
+            texto = texto.replace(',', '')
+        return int(float(texto))
+    except Exception:
+        return 0
+
+# Aplicamos los limpiadores robustos antes de renderizar métricas
+df_inv[precio_col] = df_inv[precio_col].apply(corregir_escala_y_fechas_precio)
+df_inv[stock_col] = df_inv[stock_col].apply(limpiar_stock_fechas)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 total_prods = len(df_inv)
-total_stock = int(pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0).sum())
-valor_total = pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0).mul(df_inv[precio_col]).sum()
-sin_stock   = int((pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0) <= 0).sum())
+total_stock = int(df_inv[stock_col].sum())
+valor_total = df_inv[stock_col].mul(df_inv[precio_col]).sum()
+sin_stock   = int((df_inv[stock_col] <= 0).sum())
 n_empresas  = df_inv[empresa_col].nunique()
 
 col1, col2, col3, col4 = st.columns(4)
@@ -238,10 +262,7 @@ if busqueda:
     df_mostrar = df_mostrar[df_mostrar[nombre_col].str.contains(busqueda, case=False, na=False)]
 
 def resaltar_stock(row):
-    try:
-        stock = float(str(row.iloc[3]).replace(',', ''))
-    except Exception:
-        stock = 0
+    stock = row.iloc[3]
     if stock <= 0:
         return ['background-color: #FEE2E2'] * len(row)
     elif stock <= 5:
