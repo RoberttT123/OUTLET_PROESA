@@ -25,7 +25,7 @@ def limpiar_formato_latino(valor):
 def cargar_inventario(archivo):
     """
     Carga el archivo Excel subido, asegurando que los tipos de datos
-    no rompan la estructura interna de Pandas al recibir columnas de texto.
+    no rompan la estructura interna de Pandas reconstruyendo las series.
     """
     import pandas as pd
     
@@ -34,12 +34,21 @@ def cargar_inventario(archivo):
     
     # Aseguramos que el DataFrame tenga suficientes columnas antes de operar
     if df.shape[1] > 4:
-        # Forzamos la columna de stock (posición 3) a numérico de forma segura
-        df.iloc[:, 3] = pd.to_numeric(df.iloc[:, 3], errors='coerce').fillna(0).astype(int)
+        # Obtenemos los nombres originales de las columnas para no perderlos
+        col_stock_name = df.columns[3]
+        col_precio_name = df.columns[4]
         
-        # SOLUCIÓN AL ERROR: Convertimos la columna de precio a tipo 'object' o 'float' 
-        # usando .astype() para que Pandas acepte la asignación de datos mezclados/texto
-        df.iloc[:, 4] = pd.to_numeric(df.iloc[:, 4], errors='coerce').fillna(0.0)
+        # SOLUCIÓN REDONDA: Convertimos a serie numérica limpia independientemente de la original
+        serie_stock = pd.to_numeric(df.iloc[:, 3], errors='coerce').fillna(0).astype(int)
+        serie_precio = pd.to_numeric(df.iloc[:, 4], errors='coerce').fillna(0.0).astype(float)
+        
+        # Eliminamos las columnas viejas que causan el conflicto de tipo rígido
+        columnas = list(df.columns)
+        df = df.drop(columns=[col_stock_name, col_precio_name])
+        
+        # Insertamos las series numéricas limpias exactamente en las mismas posiciones
+        df.insert(3, col_stock_name, serie_stock)
+        df.insert(4, col_precio_name, serie_precio)
         
     return df
 
