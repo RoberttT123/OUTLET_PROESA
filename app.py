@@ -122,7 +122,6 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
         val_stock = row[stock_col_name]
         val_precio = row[precio_col_name]
         
-        # 1. Identificar si el valor ya es una fecha o un string con guiones de fecha (ej: 2026-06-01)
         es_fecha_precio = hasattr(val_precio, 'strftime') or re.match(r'^\d{4}-\d{2}-\d{2}', str(val_precio).strip())
         
         try:
@@ -131,7 +130,6 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
         except Exception:
             stock_float = 0.0
 
-        # CASO A: El precio fue corrompido por Excel y se volvió una FECHA
         if es_fecha_precio:
             if hasattr(val_precio, 'strftime'):
                 mes = val_precio.month
@@ -141,16 +139,13 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
                 mes = int(partes[1])
                 dia = int(partes[2])
             
-            # Sub-caso A1: Cruce de columnas real (Stock atrapado en la fecha, Precio en el stock)
             if 0.0 < stock_float < 10.0:
                 precio_final = stock_float
                 stock_final = int(dia if dia > 5 else mes)
-            
-            # Sub-caso A2: El precio original era un decimal como "06.01" o "12.30" y Excel lo volvió fecha
             else:
-                if mes == 6 and dia == 1:    # Se volvió 1 de Junio -> Originalmente era 6.01
+                if mes == 6 and dia == 1:
                     precio_final = 6.01
-                elif mes == 1 and dia == 6:  # Se volvió 6 de Enero -> Originalmente era 6.01
+                elif mes == 1 and dia == 6:
                     precio_final = 6.01
                 else:
                     precio_final = float(f"{mes}.{dia:02d}")
@@ -164,8 +159,6 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
                     stock_final = int(float(s_str))
                 except Exception:
                     stock_final = 0
-
-        # CASO B: El precio está PERFECTO en el Excel (es un número estándar como 32.43)
         else:
             try:
                 p_str = str(val_precio).upper().replace("BS", "").replace(',', '').strip()
@@ -183,7 +176,6 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
             except Exception:
                 stock_final = 0
 
-        # Control de seguridad para precios inflados accidentalmente por puntos de miles
         if precio_final >= 1000.0:
             precio_final = precio_final / 100.0
 
@@ -195,9 +187,15 @@ def sanitizar_matriz_inventario(df, s_col_idx=3, p_col_idx=4):
     return df
 
 
+# ── ESCUDO 1: LEER DE LA NUBE CON CACHÉ DE TIEMPO REAL REFORZADO ──
+@st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner=False)
+def obtener_inventario_sheets_protegido(url, hoja):
+    """Descarga datos de Google Sheets pero congela el resultado 5 minutos para evitar baneos de cuota."""
+    return obtener_inventario_sheets(url, hoja)
+
+
 # ── FUNCIÓN INTERNA OPTIMIZADA POR LOTES PARA LA NUBE ──
 def escribir_inventario_sheets(url_sheet: str, hoja: str, df_nuevo: pd.DataFrame) -> bool:
-    """Borra la hoja actual en Google Sheets y sube la nueva matriz en un lote rápido JSON."""
     try:
         gc = get_gsheet_connection()
         if gc is None:
@@ -207,25 +205,18 @@ def escribir_inventario_sheets(url_sheet: str, hoja: str, df_nuevo: pd.DataFrame
         worksheet = spreadsheet.worksheet(hoja)
         
         df_copia = df_nuevo.copy()
-        
-        # Tipar estrictamente las columnas para remover objetos complejos de Pandas
         df_copia.iloc[:, 1] = df_copia.iloc[:, 1].astype(str).str.strip()
         df_copia.iloc[:, 3] = df_copia.iloc[:, 3].astype(int)
         df_copia.iloc[:, 4] = df_copia.iloc[:, 4].astype(float)
         
         cabeceras = df_copia.columns.tolist()
-        
-        # Formatear la matriz a tipos nativos de Python estándar
         filas = []
         for v in df_copia.fillna("").values.tolist():
             filas.append([str(x) if isinstance(x, (str, bool)) else x for x in v])
             
         matriz_completa = [cabeceras] + filas
-        
-        # 1. Limpiar hoja
         worksheet.clear()
         
-        # 2. Inyección veloz por bloques mediante API v4 de Google Sheets
         num_filas = len(matriz_completa)
         num_columnas = len(cabeceras)
         letra_columna = chr(64 + num_columnas)
@@ -242,18 +233,19 @@ def escribir_inventario_sheets(url_sheet: str, hoja: str, df_nuevo: pd.DataFrame
         return False
 
 
-# ── CONTROLADOR DE PERSISTENCIA Y CACHÉ OPERATIVA ──
-def _inventario_expirado() -> bool:
-    ts = st.session_state.get('inv_cloud_timestamp')
-    if ts is None:
-        return True
-    return (datetime.now() - ts).total_seconds() > CACHE_TTL_SEGUNDOS
-
+# ── ESCUDO 2: CONTROLADOR DE PERSISTENCIA BASADO EN MEMORIA VOLATIL ──
 def cargar_inventario_visto():
+    # Si ya lo tenemos en el State actual y no ha expirado, no hacemos nada
+    if 'df_inventario_maestro' in st.session_state and st.session_state.df_inventario_maestro is not None:
+        ts = st.session_state.get('inv_cloud_timestamp')
+        if ts and (datetime.now() - ts).total_seconds() < CACHE_TTL_SEGUNDOS:
+            return
+
     if USING_SHEETS:
         try:
-            df_cloud = obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
-            if not df_cloud.empty:
+            # Consume la función con caché temporal
+            df_cloud = obtener_inventario_sheets_protegido(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
+            if df_cloud is not None and not df_cloud.empty:
                 st.session_state.df_inventario_maestro = df_cloud
                 st.session_state['inv_cloud_timestamp'] = datetime.now()
                 return
@@ -266,9 +258,8 @@ def cargar_inventario_visto():
     else:
         st.session_state.df_inventario_maestro = None
 
-if 'df_inventario_maestro' not in st.session_state or _inventario_expirado():
-    cargar_inventario_visto()
-
+# Ejecutamos la carga segura
+cargar_inventario_visto()
 df_inv = st.session_state.df_inventario_maestro
 
 render_nav(active_page='inicio', inventario_df=df_inv)
@@ -298,6 +289,7 @@ if archivo:
             df_sanitizado = sanitizar_matriz_inventario(df_temp.copy(), s_col_idx=3, p_col_idx=4)
             guardar_inventario_maestro(df_sanitizado)
             
+            # Guardamos inmediatamente en RAM local
             st.session_state.df_inventario_maestro = df_sanitizado
             st.session_state['inv_cloud_timestamp'] = datetime.now()
 
@@ -310,6 +302,7 @@ if archivo:
                 else:
                     st.warning("⚠️ Guardado localmente, pero falló la escritura directa en Google Sheets.")
                 
+    # Vaciamos selectivamente el caché para forzar que la siguiente lectura asimile el cambio
     st.cache_data.clear()
     status_container.empty()
     
@@ -326,9 +319,7 @@ stock_col   = df_inv.columns[3]
 precio_col  = df_inv.columns[4]
 empresa_col = df_inv.columns[5]
 
-# Sanitización preventiva en caliente sobre los datos cargados en memoria
 df_inv = sanitizar_matriz_inventario(df_inv, s_col_idx=3, p_col_idx=4)
-
 
 # Cálculo dinámico de métricas consolidadas
 total_prods = len(df_inv)
@@ -368,7 +359,6 @@ with col4:
     </div>""", unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
-
 st.markdown('<div class="section-title">🔍 Catálogo de Productos</div>', unsafe_allow_html=True)
 
 col_filtro, col_busqueda = st.columns([1, 2])
