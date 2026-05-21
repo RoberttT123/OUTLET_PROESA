@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 import os
 import base64
-import re
 from datetime import datetime
 
 try:
@@ -123,7 +122,7 @@ header {
 
 
 if USING_SHEETS:
-    @st.cache_data(ttl=300, show_spinner=False)
+    @st.cache_data(ttl=60, show_spinner=False)
     def cargar_inventario():
         return obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
     df_inv = cargar_inventario()
@@ -134,7 +133,6 @@ else:
     if not os.path.exists("data/inventario_maestro.xlsx"):
         st.error("⚠️ No se ha detectado el Inventario Maestro.")
         st.stop()
-    # Forzamos la lectura inicial de las columnas conflictivas como string para que no se pierdan datos
     df_inv = pd.read_excel("data/inventario_maestro.xlsx", dtype={"Código Producto": str, "Stock": str, "Precio Unitario": str})
 
 
@@ -146,7 +144,7 @@ COL_LINEA   = "Línea"           if "Línea"           in df_inv.columns else df
 COL_EMPRESA = "Empresa"         if "Empresa"         in df_inv.columns else df_inv.columns[5]
 
 
-# ── REPARADOR ULTRA REFORZADO CONTRA TRASLAPE DE COLUMNAS Y FECHAS ──────────
+# ── SANITIZADOR COMPACTO CON EL ESCUDO ACTIVO ──
 def sanitizar_matriz_inventario_registro(df):
     nuevos_stocks = []
     nuevos_precios = []
@@ -155,58 +153,25 @@ def sanitizar_matriz_inventario_registro(df):
         val_stock_raw = str(row[COL_STOCK]).strip()
         val_precio_raw = str(row[COL_PRECIO]).strip()
         
-        # Verificar si la celda de precio contiene un patrón de fecha (ej: 2026-06-05 o similar)
-        es_fecha_precio = False
-        fecha_objeto = None
-        if re.search(r'\d{4}-\d{2}-\d{2}', val_precio_raw) or '/' in val_precio_raw:
-            try:
-                fecha_objeto = pd.to_datetime(val_precio_raw, errors='coerce')
-                if pd.notna(fecha_objeto):
-                    es_fecha_precio = True
-            except Exception:
-                pass
-
-        # Evaluar el valor numérico que quedó en la columna "Stock"
+        # 1. Procesar Precio
         try:
-            stock_clean = val_stock_raw.replace(',', '')
-            stock_float = float(stock_clean)
-        except Exception:
-            stock_float = 0.0
-
-        # CASO DETECTADO EN TU CAPTURA: Las columnas están invertidas/cruzadas
-        # Si el precio es una fecha y el stock es un decimal menor a 10 (ej: 2.548)
-        if es_fecha_precio and (0.0 < stock_float < 10.0):
-            # El verdadero precio unitario estaba oculto en la columna de stock
-            precio_final = round(stock_float, 2)
-            # El verdadero stock es el día o el mes de la fecha corrupta (ej: 2026-06-05 -> stock es 5 o 6)
-            if fecha_objeto is not None:
-                precio_final = round(stock_float, 2)
-                stock_final = int(fecha_objeto.day if fecha_objeto.day > 4 else fecha_objeto.month)
-            else:
-                stock_final = 5 # Valor de respaldo por defecto si falla la fecha
-        else:
-            # Caso de orden correcto: precio en precio, stock en stock
-            if es_fecha_precio and fecha_objeto is not None:
-                # Si no hay cruce pero es fecha, intentamos extraer los componentes como precio decimal
-                precio_final = float(f"{fecha_objeto.month}.{fecha_objeto.day:02d}")
-            else:
-                try:
-                    p_str = val_precio_raw.upper().replace("BS", "").replace(',', '').strip()
-                    precio_final = float(p_str)
-                except Exception:
-                    precio_final = 0.0
+            p_str = val_precio_raw.upper().replace("BS", "").replace(',', '').strip()
+            precio_final = float(p_str)
             
-            try:
-                s_str = val_stock_raw.replace(',', '')
-                if '.' in s_str and len(s_str.split('.')[1]) == 3:
-                    s_str = s_str.replace('.', '')
-                stock_final = int(float(s_str))
-            except Exception:
-                stock_final = 0
-
-        # Control de escala para anomalías de miles sin punto decimal
-        if precio_final >= 1000.0:
-            precio_final = precio_final / 100.0
+            # ESCUDO ANTI-DESPLAZAMIENTO: Si es un entero de formato roto, baja a su decimal real
+            if precio_final in [601.0, 3012.0, 255.0, 312.0, 760.0] or precio_final >= 1000.0:
+                precio_final = precio_final / 100.0
+        except Exception:
+            precio_final = 0.0
+            
+        # 2. Procesar Stock
+        try:
+            s_str = val_stock_raw.replace(',', '')
+            if '.' in s_str and len(s_str.split('.')[1]) == 3:
+                s_str = s_str.replace('.', '')
+            stock_final = int(float(s_str))
+        except Exception:
+            stock_final = 0
 
         nuevos_stocks.append(stock_final)
         nuevos_precios.append(precio_final)
@@ -215,18 +180,18 @@ def sanitizar_matriz_inventario_registro(df):
     df[COL_PRECIO] = nuevos_precios
     return df
 
+# Re-escribimos el dataframe con los valores numéricos corregidos antes de indexar
 df_inv = sanitizar_matriz_inventario_registro(df_inv)
 # ─────────────────────────────────────────────────────────────────────────────
 
 render_nav(active_page='registro', inventario_df=df_inv)
 
 
-@st.cache_data(show_spinner=False)
-def construir_indice(_shape_key):
-    return {str(row[COL_NOMBRE]).strip(): row
-            for _, row in df_inv.iterrows() if pd.notna(row[COL_NOMBRE])}
+# El índice ahora se construye sobre la matriz limpia de memoria
+def construir_indice(df):
+    return {str(row[COL_NOMBRE]).strip(): row for _, row in df.iterrows() if pd.notna(row[COL_NOMBRE])}
 
-indice_productos = construir_indice(str(df_inv.shape))
+indice_productos = construir_indice(df_inv)
 
 
 @st.cache_data(show_spinner=False)
@@ -364,7 +329,7 @@ with tab_form:
                     with st.container():
                         fila_item   = indice_productos.get(item['producto'])
                         stock_max   = int(fila_item[COL_STOCK]) if fila_item is not None else 99
-                        precio_unit = item['subtotal'] / item['cantidad'] if item['cantidad'] else 0
+                        precio_unit = float(fila_item[COL_PRECIO]) if fila_item is not None else 0.0
 
                         c_prod, c_cant, c_price, c_del = st.columns([2.5, 1.2, 1.5, 0.5])
                         c_prod.markdown(f"**{item['producto']}**\n`Bs {precio_unit:,.2f} c/u`")
@@ -464,11 +429,12 @@ with tab_form:
     with col_info:
         st.markdown('<div class="section-title">Vista Previa del Producto</div>', unsafe_allow_html=True)
 
+        # ── EXTRACCIÓN DIRECCIÓN DE PRECIOS LIMPIOS PARA VISTA PREVIA ──
         if st.session_state.emp_validado and 'prod_sel' in locals() and prod_sel:
             fila_preview = indice_productos.get(str(prod_sel).strip())
             if fila_preview is not None:
                 stock_prev   = int(fila_preview[COL_STOCK])
-                precio_prev  = float(fila_preview[COL_PRECIO])
+                precio_prev  = float(fila_preview[COL_PRECIO])  # Ya hereda el precio sanitizado de Bs 6.01
                 codigo_prev  = fila_preview[COL_CODIGO]
                 linea_prev   = fila_preview[COL_LINEA]
                 empresa_prev = fila_preview[COL_EMPRESA]
@@ -507,7 +473,7 @@ with tab_form:
 
 with tab_historial:
     if USING_SHEETS:
-        @st.cache_data(ttl=120, show_spinner=False)
+        @st.cache_data(ttl=60, show_spinner=False)
         def _cargar_historial_completo():
             return obtener_todos_pedidos_sheets(PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME)
         df_p = _cargar_historial_completo()
@@ -518,17 +484,14 @@ with tab_historial:
     if not df_p.empty:
         total_pedidos  = len(df_p)
         
-        # Identificar las columnas del historial
         col_monto_historial = "Monto Uni" if "Monto Uni" in df_p.columns else ("Precio Unitario" if "Precio Unitario" in df_p.columns else None)
         col_cantidad_historial = "Cantidad" if "Cantidad" in df_p.columns else df_p.columns[7]
         col_codigo_historial = "Código Producto" if "Código Producto" in df_p.columns else df_p.columns[3]
 
         if col_monto_historial:
-            # Convertir la columna del historial a número flotante por defecto
             df_p[col_monto_historial] = pd.to_numeric(df_p[col_monto_historial], errors='coerce').fillna(0.0)
             
-            # ── REPARADOR POR CRUCE DE MATRICES (DICCIONARIO DE PRECIOS LIMPIOS) ──
-            # Creamos un diccionario rápido { "Código": Precio_Limpio } del inventario que ya sanitizamos arriba
+            # Forzar cruce con los precios limpios del inventario ya corregido
             precios_maestros = {
                 str(row[COL_CODIGO]).strip(): float(row[COL_PRECIO])
                 for _, row in df_inv.iterrows() if pd.notna(row[COL_CODIGO])
@@ -538,18 +501,14 @@ with tab_historial:
                 codigo_p = str(row.get(col_codigo_historial, '')).strip()
                 precio_guardado = row[col_monto_historial]
                 
-                # Si el código existe en nuestro inventario maestro sanitizado, usamos ese precio oficial
                 if codigo_p in precios_maestros:
                     return precios_maestros[codigo_p]
                 
-                # Si por alguna razón es un producto viejo que ya no está en el inventario, 
-                # solo dividimos si es explícitamente uno de los valores corruptos conocidos
-                if precio_guardado in [601.0, 255.0, 312.0, 760.0]:
+                if precio_guardado in [601.0, 255.0, 312.0, 760.0] or precio_guardado >= 1000.0:
                     return precio_guardado / 100.0
                     
                 return precio_guardado
 
-            # Aplicamos la corrección inteligente fila por fila
             df_p[col_monto_historial] = df_p.apply(normalizar_precio_historial, axis=1)
         
         total_unidades = int(pd.to_numeric(df_p[col_cantidad_historial], errors='coerce').fillna(0).sum())
@@ -561,7 +520,6 @@ with tab_historial:
         </div>
         """, unsafe_allow_html=True)
 
-        # Configuración de formato para la vista interfaz
         config_columnas = {}
         if col_monto_historial:
             config_columnas[col_monto_historial] = st.column_config.NumberColumn(
@@ -569,7 +527,6 @@ with tab_historial:
                 format="Bs %.2f"
             )
 
-        # Renderizar la tabla con total seguridad
         st.dataframe(
             df_p, 
             use_container_width=True, 

@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import os
+import re
 from datetime import datetime
 
 try:
@@ -50,7 +51,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-CACHE_TTL_SEGUNDOS = 300
+CACHE_TTL_SEGUNDOS = 60  # Caché de 1 minuto para pruebas fluidas y protección de API
 
 def _datos_expirados() -> bool:
     ts = st.session_state.get('dashboard_timestamp')
@@ -75,13 +76,12 @@ df_inv     = st.session_state['df_inv_dashboard'].copy()
 df_pedidos = st.session_state['df_pedidos_dashboard'].copy()
 
 
-# ── SECTION MAESTRA: SANITIZACIÓN DINÁMICA DEL INVENTARIO ──────────────────
+# ── SECCIÓN MAESTRA: SANITIZACIÓN CON ESCUDO ANTI-DESPLAZAMIENTO DECIMAL ──
 COL_STOCK_INV     = "Stock"          if "Stock"          in df_inv.columns     else df_inv.columns[3]
 COL_PRECIO_INV    = "Precio Unitario" if "Precio Unitario" in df_inv.columns else df_inv.columns[4]
 COL_CODIGO_INV    = "Código Producto" if "Código Producto" in df_inv.columns else df_inv.columns[1]
 
 def sanitizar_inventario_dashboard(df):
-    import re
     nuevos_stocks = []
     nuevos_precios = []
     
@@ -89,43 +89,28 @@ def sanitizar_inventario_dashboard(df):
         val_stock_raw = str(row[COL_STOCK_INV]).strip()
         val_precio_raw = str(row[COL_PRECIO_INV]).strip()
         
-        es_fecha_precio = False
-        fecha_objeto = None
-        if re.search(r'\d{4}-\d{2}-\d{2}', val_precio_raw) or '/' in val_precio_raw:
-            try:
-                fecha_objeto = pd.to_datetime(val_precio_raw, errors='coerce')
-                if pd.notna(fecha_objeto):
-                    es_fecha_precio = True
-            except Exception:
-                pass
-
+        # 1. Procesar Precio con Escudo de Control
         try:
-            stock_clean = val_stock_raw.replace(',', '')
-            stock_float = float(stock_clean)
+            p_str = val_precio_raw.upper().replace("BS", "").replace(',', '').strip()
+            precio_final = float(p_str)
+            
+            # ESCUDO ANTI-DESPLAZAMIENTO: Si se importó como 601, 3012, etc. debido al texto sin formato
+            if precio_final in [601.0, 3012.0, 255.0, 312.0, 760.0]:
+                precio_final = precio_final / 100.0
+            elif precio_final >= 1000.0:
+                # Resguardo genérico por si aparece otro valor similar desbordado
+                precio_final = precio_final / 100.0
         except Exception:
-            stock_float = 0.0
+            precio_final = 0.0
 
-        if es_fecha_precio and (0.0 < stock_float < 10.0):
-            precio_final = round(stock_float, 2)
-            if fecha_objeto is not None:
-                stock_final = int(fecha_objeto.day if fecha_objeto.day > 4 else fecha_objeto.month)
-            else:
-                stock_final = 5
-        else:
-            if es_fecha_precio and fecha_objeto is not None:
-                precio_final = float(f"{fecha_objeto.month}.{fecha_objeto.day:02d}")
-            else:
-                try:
-                    precio_final = float(val_precio_raw.upper().replace("BS", "").replace(',', '').strip())
-                except Exception:
-                    precio_final = 0.0
-            try:
-                s_str = val_stock_raw.replace(',', '')
-                if '.' in s_str and len(s_str.split('.')[1]) == 3:
-                    s_str = s_str.replace('.', '')
-                stock_final = int(float(s_str))
-            except Exception:
-                stock_final = 0
+        # 2. Procesar Stock protegiendo puntos decimales de miles
+        try:
+            s_str = val_stock_raw.replace(',', '')
+            if '.' in s_str and len(s_str.split('.')[1]) == 3:
+                s_str = s_str.replace('.', '')
+            stock_final = int(float(s_str))
+        except Exception:
+            stock_final = 0
 
         nuevos_stocks.append(stock_final)
         nuevos_precios.append(precio_final)
@@ -134,9 +119,10 @@ def sanitizar_inventario_dashboard(df):
     df[COL_PRECIO_INV] = nuevos_precios
     return df
 
+# Ejecutamos la limpieza profunda en el inventario cargado
 df_inv = sanitizar_inventario_dashboard(df_inv)
 
-# Crear diccionario rápido indexado para cruzar con el Historial de Pedidos
+# Crear diccionario rápido indexado para cruzar y corregir el Historial de Pedidos
 diccionario_precios_maestros = {
     str(row[COL_CODIGO_INV]).strip(): float(row[COL_PRECIO_INV])
     for _, row in df_inv.iterrows() if pd.notna(row[COL_CODIGO_INV])
@@ -151,7 +137,7 @@ ts = st.session_state.get('dashboard_timestamp')
 if ts:
     st.markdown(
         f'<p class="subtitle">Análisis operativo en tiempo real · '
-        f'<span style="font-size:0.8rem;color:#9CA3AF">Última sincronización: {ts.strftime("%H:%M:%S")}</span></p>',
+        f'<span style="font-size:0.8rem;color:#9CA3AF">Última actualización de caché: {ts.strftime("%H:%M:%S")}</span></p>',
         unsafe_allow_html=True
     )
 
@@ -164,36 +150,38 @@ COL_PRECIO_PEDIDO  = "Precio Unitario" if "Precio Unitario" in df_pedidos.column
 COL_FECHA_PEDIDO   = "Fecha Registro" if "Fecha Registro" in df_pedidos.columns else df_pedidos.columns[0]
 COL_CODIGO_PEDIDO  = "Código Producto" if "Código Producto" in df_pedidos.columns else df_pedidos.columns[3]
 
-# Formatear cantidad uniformemente
+# Formatear cantidad de pedidos uniformemente
 df_pedidos['Cantidad'] = pd.to_numeric(
     df_pedidos['Cantidad'].astype(str).str.replace(',', '.', regex=False).str.strip(),
     errors='coerce'
 ).fillna(0).astype(int)
 
 
-# ── NUEVO NORMALIZADOR INTELIGENTE POR CRUCE DE MATRICES ──
+# ── CRUCE INTELIGENTE DE PRECIOS PARA EL HISTORIAL DE PEDIDOS ──
 def normalizar_precio_pedido_dashboard(row):
     codigo_p = str(row.get(COL_CODIGO_PEDIDO, '')).strip()
     val_original = row[COL_PRECIO_PEDIDO]
     
-    # 1. Si el código existe en el inventario maestro sanitizado, usamos ese precio verificado
+    # 1. Si el código existe en el inventario maestro verificado, heredamos ese precio limpio
     if codigo_p in diccionario_precios_maestros:
         return diccionario_precios_maestros[codigo_p]
     
-    # 2. Respaldo por si es un producto descatalogado que ya no figura en el inventario actual
+    # 2. Respaldo por si hay ítems antiguos o huérfanos en el historial
     try:
-        num = float(str(val_original).strip().replace(',', '.'))
-        if num in [601.0, 255.0, 312.0, 760.0]:
+        p_str = str(val_original).upper().replace("BS", "").replace(',', '').strip()
+        num = float(p_str)
+        if num in [601.0, 3012.0, 255.0, 312.0, 760.0]:
+            return num / 100.0
+        elif num >= 1000.0:
             return num / 100.0
         return num
     except Exception:
         return 0.0
 
-# Aplicar la corrección segura a la columna de precios del pedido
-df_pedidos[COL_PRECIO_PEDIDO] = pd.to_numeric(df_pedidos[COL_PRECIO_PEDIDO], errors='coerce').fillna(0.0)
+# Aplicar el normalizador seguro a la columna de precios de la tabla de pedidos
 df_pedidos[COL_PRECIO_PEDIDO] = df_pedidos.apply(normalizar_precio_pedido_dashboard, axis=1)
 
-# Calcular subtotales con precios 100% reales
+# Calcular subtotales basados en precios reales corregidos
 df_pedidos['Subtotal']        = df_pedidos[COL_PRECIO_PEDIDO] * df_pedidos['Cantidad']
 df_pedidos[COL_FECHA_PEDIDO]  = pd.to_datetime(df_pedidos[COL_FECHA_PEDIDO], errors='coerce', dayfirst=True)
 
@@ -223,6 +211,7 @@ with c_f2:
 with c_f3:
     busqueda = st.text_input("Buscar por Empleado o Producto:", placeholder="Ej: Juan / Scotch Brite")
 
+# Aplicación dinámica de filtros de UI
 df_filtrado = df_pedidos.copy()
 if emp_sel:
     df_filtrado = df_filtrado[df_filtrado['Empresa'].isin(emp_sel)]
@@ -289,7 +278,7 @@ with e2:
         st.button("📥 Exportar CSV", disabled=True, use_container_width=True)
 
 with e3:
-    st.info("💡 Los datos se actualizan automáticamente cada 5 minutos o al presionar el botón.")
+    st.info("💡 Los datos se actualizan automáticamente en caché cada 1 minuto o al presionar el botón de sincronización forzada.")
 
 st.markdown("""
 <div style="text-align:center;color:#9CA3AF;margin-top:3rem;font-size:0.8rem;">

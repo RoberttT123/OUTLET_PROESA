@@ -559,15 +559,38 @@ else:
         # ══════════════════════════════════════════════════════════════════════
         # TAB 2 — HISTORIAL
         # ══════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════
+        # TAB 2 — HISTORIAL
+        # ══════════════════════════════════════════════════════════════════════
         elif st.session_state.tab_idx == 2:
             st.markdown('<div class="section-title">📋 Registro Histórico de Compras</div>', unsafe_allow_html=True)
             df_hist = cargar_historial(st.session_state.cod_emp)
+            
             if df_hist is not None and not df_hist.empty:
                 st.caption("Últimos artículos solicitados (orden cronológico descendente):")
+                
+                # Detectar las columnas correctas dinámicamente
+                col_monto = "Precio Unitario" if "Precio Unitario" in df_hist.columns else ("Monto Uni" if "Monto Uni" in df_hist.columns else None)
+                
                 for _, p in df_hist.tail(10).iloc[::-1].iterrows():
+                    # 1. Extraer precio guardado
+                    precio_historico = 0.0
+                    if col_monto and pd.notna(p[col_monto]):
+                        try:
+                            precio_historico = float(str(p[col_monto]).replace(',', '.'))
+                            # Escudo por si quedó algún registro antiguo con el formato roto
+                            if precio_historico in [601.0, 3012.0, 255.0, 312.0, 760.0] or precio_historico >= 1000.0:
+                                precio_historico = precio_historico / 100.0
+                        except Exception:
+                            precio_historico = 0.0
+
+                    cantidad = int(p.get('Cantidad', 0))
+                    subtotal_historico = precio_historico * cantidad
+
+                    # 2. Renderizar la información con el precio incluido
                     st.markdown(
                         f"📦 **{p.get('Nombre Producto','N/A')}**<br>"
-                        f"🔢 **{p.get('Cantidad', 0)} unidades**<br>"
+                        f"🔢 {cantidad} ud. × Bs {precio_historico:,.2f} — **Total: Bs {subtotal_historico:,.2f}**<br>"
                         f"📅 <small style='color:#777'>{p.get('Fecha Registro','N/A')}</small>",
                         unsafe_allow_html=True
                     )
