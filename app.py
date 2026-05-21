@@ -29,7 +29,7 @@ st.set_page_config(
 )
 
 PATH_INV_SISTEMA = "data/inventario_maestro.xlsx"
-CACHE_TTL_SEGUNDOS = 300  # Los datos dinámicos de la nube se refrescan cada 5 minutos
+CACHE_TTL_SEGUNDOS = 120  # Los datos dinámicos de la nube se refrescan cada 5 minutos
 
 st.markdown("""
 <style>
