@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import base64
+import re
 from src.database import cargar_inventario, guardar_inventario_maestro
 from src.nav import render_nav
 
@@ -125,33 +126,60 @@ precio_col  = df_inv.columns[4]
 empresa_col = df_inv.columns[5]
 
 
-# ── CORRECCIÓN INTEGRAL DE ESCALA PARA EL PRECIO UNITARIO DEL EXCEL ──────────
-def corregir_escala_precio(valor_str):
-    if pd.isna(valor_str) or str(valor_str).strip() == "":
+# ── NUEVA FUNCIÓN DE NORMALIZACIÓN ULTRA ROBUSTA PARA EVITAR DEFAULTS DE EXCEL ──
+def corregir_escala_precio_definitivo(valor):
+    if pd.isna(valor):
         return 0.0
     try:
-        texto = str(valor_str).strip()
+        # Convertimos a string y eliminamos cualquier símbolo de moneda "Bs" o espacios raros
+        texto = str(valor).upper().replace("BS", "").strip()
         
-        # Si ya viene explícitamente formateado con su punto o coma decimal, lo respetamos
-        if '.' in texto or ',' in texto:
-            limpio = texto.replace(',', '.')
-            return float(limpio)
-        
-        # Si viene un bloque numérico puro sin separadores (ej: "1853")
+        # Caso 1: Tiene comas y puntos a la vez (ej: "1,853.00" o "1.853,00")
+        if (',' in texto) and ('.' in texto):
+            # Identificamos cuál es el separador decimal real (el último símbolo)
+            if texto.find(',') > texto.find('.'):
+                # La coma es el decimal (ej: 1.853,20) -> removemos puntos y cambiamos coma por punto
+                texto = texto.replace('.', '').replace(',', '.')
+            else:
+                # El punto es el decimal (ej: 1,853.20) -> removemos comas
+                texto = texto.replace(',', '')
+            return float(texto)
+            
+        # Caso 2: Solo tiene comas (ej: "18,53")
+        elif ',' in texto:
+            # Si solo hay una coma y está a 2 dígitos del final, es decimal fijo boliviano
+            partes = texto.split(',')
+            if len(partes) == 2 and len(partes[1]) == 2:
+                return float(texto.replace(',', '.'))
+            else:
+                # De lo contrario es separador de miles corrupto sin decimales
+                texto = texto.replace(',', '')
+                
+        # Caso 3: Solo tiene puntos (ej: "18.53")
+        elif '.' in texto:
+            partes = texto.split('.')
+            if len(partes) == 2 and len(partes[1]) == 2:
+                return float(texto)
+            else:
+                texto = texto.replace('.', '')
+
+        # Conversión final del bloque limpio
         num = float(texto)
         if num == 0:
             return 0.0
             
-        # Si el entero plano es muy grande, recorremos la coma dos posiciones a la izquierda
-        if num >= 1000:
+        # LÓGICA DE CONTROL DE MAGNITUD FINAL:
+        # Si quedó guardado como un entero gigante sin decimales (ej: 1853 o 18530)
+        # y sabemos que pertenece a un ítem unitario del outlet, reposicionamos la coma
+        if num >= 1000.0:
             return num / 100.0
             
         return num
-    except ValueError:
+    except Exception:
         return 0.0
 
-# Aplicamos la normalización de precios antes de computar métricas y dibujar la tabla
-df_inv[precio_col] = df_inv[precio_col].apply(corregir_escala_precio)
+# Aplicamos la limpieza transaccional directo a la columna del dataframe maestro
+df_inv[precio_col] = df_inv[precio_col].apply(corregir_escala_precio_definitivo)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
