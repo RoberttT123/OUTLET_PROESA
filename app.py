@@ -126,84 +126,78 @@ precio_col  = df_inv.columns[4]
 empresa_col = df_inv.columns[5]
 
 
-# ── NUEVA FUNCIÓN SANITIZADORA ANTI AUTO-FECHAS DE EXCEL ──
-def corregir_escala_y_fechas_precio(valor):
-    if pd.isna(valor):
-        return 0.0
+# ── NUEVO PROCESADOR FILA POR FILA CON REPARACIÓN DE CRUCE DE COLUMNAS ──────
+def sanitizar_matriz_inventario(df):
+    nuevos_stocks = []
+    nuevos_precios = []
     
-    # Si viene directamente como un objeto datetime de pandas/excel
-    if hasattr(valor, 'strftime'):
-        # Extraemos mes y día (Ej: de 2026-06-05 extrae día 5 y mes 6 -> 5.06 o 6.05)
-        # Dado que los precios del outlet suelen ser menores a 13 en estos productos, evaluamos:
-        dia = valor.day
-        mes = valor.month
-        # Retornamos una reconstrucción lógica aproximada para revertir el daño de Excel
-        return float(f"{mes}.{dia:02d}")
-
-    try:
-        texto = str(valor).upper().replace("BS", "").strip()
+    for idx, row in df.iterrows():
+        val_stock = row[stock_col]
+        val_precio = row[precio_col]
         
-        # Si el string tiene formato de fecha (Ej: "2026-06-05")
-        if re.match(r'^\d{4}-\d{2}-\d{2}', texto):
-            partes_fecha = texto.split('-')
-            mes = int(partes_fecha[1])
-            dia = int(partes_fecha[2])
-            return float(f"{mes}.{dia:02d}")
+        # Detectar si el precio viene como un objeto de fecha o string con guiones
+        es_fecha_precio = hasattr(val_precio, 'strftime') or re.match(r'^\d{4}-\d{2}-\d{2}', str(val_precio).strip())
+        
+        try:
+            # Evaluar el stock crudo
+            stock_str = str(val_stock).replace(',', '').strip()
+            stock_float = float(stock_str)
+        except Exception:
+            stock_float = 0.0
 
-        # Caso 1: Tiene comas y puntos a la vez (ej: "1,853.00")
-        if (',' in texto) and ('.' in texto):
-            if texto.find(',') > texto.find('.'):
-                texto = texto.replace('.', '').replace(',', '.')
+        # CASO CRÍTICO: Las columnas se cruzaron (Ej: Stock=2.548 y Precio=2026-06-05)
+        if es_fecha_precio and (0.0 < stock_float < 10.0):
+            # El "stock" era en realidad el precio real (ej: 2.548 -> Bs 2.55)
+            precio_final = stock_float
+            # El stock real quedó atrapado en el día o mes de la fecha corrupta
+            if hasattr(val_precio, 'strftime'):
+                stock_final = int(val_precio.day if val_precio.day > 5 else val_precio.month)
             else:
-                texto = texto.replace(',', '')
-            return float(texto)
+                partes = str(val_precio).strip().split('-')
+                d = int(partes[2])
+                m = int(partes[1])
+                stock_final = int(d if d > 5 else m)
+        else:
+            # Caso Normal: Las columnas están en su posición correcta
+            # 1. Limpiar Precio
+            if es_fecha_precio:
+                if hasattr(val_precio, 'strftime'):
+                    precio_final = float(f"{val_precio.month}.{val_precio.day:02d}")
+                else:
+                    partes = str(val_precio).strip().split('-')
+                    precio_final = float(f"{int(partes[1])}.{int(partes[2]):02d}")
+            else:
+                try:
+                    p_str = str(val_precio).upper().replace("BS", "").replace(',', '').strip()
+                    precio_final = float(p_str)
+                except Exception:
+                    precio_final = 0.0
             
-        # Caso 2: Solo tiene comas (ej: "18,53")
-        elif ',' in texto:
-            partes = texto.split(',')
-            if len(partes) == 2 and len(partes[1]) == 2:
-                return float(texto.replace(',', '.'))
-            else:
-                texto = texto.replace(',', '')
-                
-        # Caso 3: Solo tiene puntos (ej: "18.53")
-        elif '.' in texto:
-            partes = texto.split('.')
-            if len(partes) == 2 and len(partes[1]) == 2:
-                return float(texto)
-            else:
-                texto = texto.replace('.', '')
+            # 2. Limpiar Stock
+            try:
+                s_str = str(val_stock).strip()
+                # Si el stock viene con un punto de miles corrupto (ej: "3.129" de 3 mil unidades)
+                if '.' in s_str and len(s_str.split('.')[1]) == 3:
+                    s_str = s_str.replace('.', '')
+                elif ',' in s_str and len(s_str.split(',')[1]) == 3:
+                    s_str = s_str.replace(',', '')
+                stock_final = int(float(s_str))
+            except Exception:
+                stock_final = 0
 
-        num = float(texto)
-        if num >= 1000.0:
-            return num / 100.0
-            
-        return num
-    except Exception:
-        return 0.0
+        # Control de magnitud por si algún precio quedó guardado como entero (ej: 1853 -> 18.53)
+        if precio_final >= 1000.0:
+            precio_final = precio_final / 100.0
 
-def limpiar_stock_fechas(valor):
-    if pd.isna(valor):
-        return 0
-    # Si por error Excel guardó el stock como fecha
-    if hasattr(valor, 'strftime'):
-        return int(valor.day)
-    try:
-        texto = str(valor).strip()
-        if re.match(r'^\d{4}-\d{2}-\d{2}', texto):
-            return int(texto.split('-')[2])
-        # Limpieza estándar de separador de miles si viene como string ("3.129")
-        if '.' in texto and len(texto.split('.')[1]) == 3:
-            texto = texto.replace('.', '')
-        elif ',' in texto and len(texto.split(',')[1]) == 3:
-            texto = texto.replace(',', '')
-        return int(float(texto))
-    except Exception:
-        return 0
+        nuevos_stocks.append(stock_final)
+        nuevos_precios.append(precio_final)
+        
+    df[stock_col] = nuevos_stocks
+    df[precio_col] = nuevos_precios
+    return df
 
-# Aplicamos los limpiadores robustos antes de renderizar métricas
-df_inv[precio_col] = df_inv[precio_col].apply(corregir_escala_y_fechas_precio)
-df_inv[stock_col] = df_inv[stock_col].apply(limpiar_stock_fechas)
+# Ejecutamos la reparación inteligente sobre los datos cargados en memoria
+df_inv = sanitizar_matriz_inventario(df_inv)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
