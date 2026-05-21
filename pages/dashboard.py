@@ -1,10 +1,18 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
-import base64
 import os
 from datetime import datetime
 
-st.set_page_config(page_title="Dashboard General - PROESA", layout="wide", page_icon="📊")
+try:
+    st.set_page_config(
+        page_title="Dashboard General - PROESA",
+        layout="wide",
+        page_icon="📊",
+        initial_sidebar_state="expanded"
+    )
+except Exception:
+    pass
 
 try:
     from config import (
@@ -13,12 +21,10 @@ try:
     )
     from src.sheets import obtener_inventario_sheets, obtener_todos_pedidos_sheets
     from src.nav import render_nav
-    CONFIG_LOADED = True
 except ImportError as e:
-    st.error(f"❌ Error de configuración: {e}")
+    st.error(f"❌ Error crítico de configuración: {e}")
     st.stop()
 
-# ── ESTILOS ──────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap');
@@ -27,103 +33,121 @@ st.markdown("""
     .stMetric { background: white; padding: 1.5rem; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-left: 5px solid #E63946; }
     .main-title { color: #1A1A2E; font-weight: 700; font-size: 2.2rem; margin-bottom: 0.5rem; }
     .subtitle   { color: #6B7280; margin-bottom: 2rem; }
-    #MainMenu, header, footer { visibility: hidden; }
+
+    /* ── Ocultar chrome de Streamlit SIN dejar barra blanca ── */
+    #MainMenu, footer { visibility: hidden; }
+    header {
+        visibility: hidden;
+        height: 0 !important;
+        min-height: 0 !important;
+        padding: 0 !important;
+    }
     .stAppViewContainer footer { display: none !important; }
-    footer { display: none !important; }
     [data-testid="stDecoration"] { display: none !important; }
-    [data-testid="stToolbar"] { display: none !important; }
-    .stDeployButton { display: none !important; }
+    [data-testid="stToolbar"]    { display: none !important; }
+    .stDeployButton              { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── DATOS: session_state como caché compartida entre páginas ─────────────────
-#
-# El flujo es:
-#   1ª visita → no hay datos en session_state → carga de Sheets (~2-3 seg)
-#   Navegación de vuelta → datos ya en session_state → instantáneo
-#
-# El botón "Actualizar" borra el session_state y fuerza una recarga fresca.
-
-CACHE_TTL_SEGUNDOS = 300  # 5 minutos entre recargas automáticas
+CACHE_TTL_SEGUNDOS = 300
 
 def _datos_expirados() -> bool:
-    """Devuelve True si los datos son más viejos que CACHE_TTL_SEGUNDOS."""
     ts = st.session_state.get('dashboard_timestamp')
     if ts is None:
         return True
     return (datetime.now() - ts).total_seconds() > CACHE_TTL_SEGUNDOS
 
 def cargar_datos():
-    """Carga inventario y pedidos de Sheets y los guarda en session_state."""
-    with st.spinner("Cargando datos..."):
+    with st.spinner("Descargando métricas consolidadas desde la nube..."):
         inv     = obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
         pedidos = obtener_todos_pedidos_sheets(PEDIDOS_SHEET_URL, PEDIDOS_HOJA_NAME)
-        st.session_state['df_inv_dashboard']    = inv
+        st.session_state['df_inv_dashboard']     = inv
         st.session_state['df_pedidos_dashboard'] = pedidos
         st.session_state['dashboard_timestamp']  = datetime.now()
+        if 'df_inventario_maestro' not in st.session_state and not inv.empty:
+            st.session_state['df_inventario_maestro'] = inv
 
-# Cargar solo si no hay datos o si expiraron
 if 'df_pedidos_dashboard' not in st.session_state or _datos_expirados():
     cargar_datos()
 
-df_inv    = st.session_state['df_inv_dashboard']
-df_pedidos = st.session_state['df_pedidos_dashboard']
-
-# Compartir el inventario con otras páginas (app.py, registro.py)
-if 'df_inventario_maestro' not in st.session_state and not df_inv.empty:
-    st.session_state['df_inventario_maestro'] = df_inv
+df_inv     = st.session_state['df_inv_dashboard'].copy()
+df_pedidos = st.session_state['df_pedidos_dashboard'].copy()
 
 render_nav(active_page='dashboard', inventario_df=df_inv)
 
-# ── ENCABEZADO ───────────────────────────────────────────────────────────────
 st.markdown('<h1 class="main-title">📊 Panel de Control General</h1>', unsafe_allow_html=True)
-
 ts = st.session_state.get('dashboard_timestamp')
 if ts:
     st.markdown(
-        f'<p class="subtitle">Análisis en tiempo real · '
-        f'<span style="font-size:0.8rem;color:#9CA3AF">Actualizado: {ts.strftime("%H:%M:%S")}</span></p>',
+        f'<p class="subtitle">Análisis operativo en tiempo real · '
+        f'<span style="font-size:0.8rem;color:#9CA3AF">Última sincronización: {ts.strftime("%H:%M:%S")}</span></p>',
         unsafe_allow_html=True
     )
 
 if df_pedidos.empty:
-    st.info("ℹ️ No se encontraron pedidos registrados en Google Sheets.")
+    st.info("ℹ️ No se encontraron registros de pedidos en Google Sheets.")
     st.stop()
 
-# ── KPIs ─────────────────────────────────────────────────────────────────────
+COL_PRECIO_PEDIDO = "Precio Unitario" if "Precio Unitario" in df_pedidos.columns else \
+                    ("Monto Uni" if "Monto Uni" in df_pedidos.columns else df_pedidos.columns[3])
+COL_STOCK_INV     = "Stock"          if "Stock"          in df_inv.columns     else df_inv.columns[3]
+COL_FECHA_PEDIDO  = "Fecha Registro" if "Fecha Registro" in df_pedidos.columns else df_pedidos.columns[0]
+
+df_pedidos['Cantidad'] = pd.to_numeric(
+    df_pedidos['Cantidad'].astype(str).str.replace(',', '.', regex=False).str.strip(),
+    errors='coerce'
+).fillna(0).astype(int)
+
+def corregir_escala_precio(valor_str):
+    if pd.isna(valor_str) or str(valor_str).strip() == "":
+        return 0.0
+    try:
+        texto = str(valor_str).strip()
+        if '.' in texto or ',' in texto:
+            return float(texto.replace(',', '.'))
+        num = float(texto)
+        if num == 0:
+            return 0.0
+        if num >= 1000:
+            return num / 100.0
+        return num
+    except ValueError:
+        return 0.0
+
+df_pedidos[COL_PRECIO_PEDIDO] = df_pedidos[COL_PRECIO_PEDIDO].apply(corregir_escala_precio)
+df_pedidos['Subtotal']        = df_pedidos[COL_PRECIO_PEDIDO] * df_pedidos['Cantidad']
+df_inv[COL_STOCK_INV]         = pd.to_numeric(
+    df_inv[COL_STOCK_INV].astype(str).str.replace(',', '.', regex=False).str.strip(),
+    errors='coerce'
+).fillna(0)
+df_pedidos[COL_FECHA_PEDIDO]  = pd.to_datetime(df_pedidos[COL_FECHA_PEDIDO], errors='coerce', dayfirst=True)
+
+
 st.markdown("### Resumen de Operaciones")
 m1, m2, m3, m4 = st.columns(4)
 
-df_pedidos['Cantidad']  = pd.to_numeric(df_pedidos['Cantidad'],  errors='coerce').fillna(0)
-df_pedidos['Monto Uni'] = pd.to_numeric(df_pedidos['Monto Uni'], errors='coerce').fillna(0)
-df_pedidos['Subtotal']  = df_pedidos['Monto Uni'] * df_pedidos['Cantidad']
-df_inv['Stock']         = pd.to_numeric(df_inv['Stock'],         errors='coerce').fillna(0)
-
-with m1:
-    st.metric("Total Pedidos",    f"{len(df_pedidos):,}")
-with m2:
-    st.metric("Unidades Movidas", f"{int(df_pedidos['Cantidad'].sum()):,} ud.")
-with m3:
-    st.metric("Facturación Est.", f"Bs {df_pedidos['Subtotal'].sum():,.2f}")
-with m4:
-    criticos = len(df_inv[df_inv['Stock'] < 5])
-    st.metric("Alertas Stock", f"{criticos} SKU", delta="- Crítico" if criticos > 0 else "OK")
+m1.metric("Total Pedidos",    f"{len(df_pedidos):,}")
+m2.metric("Unidades Movidas", f"{int(df_pedidos['Cantidad'].sum()):,} ud.")
+m3.metric("Facturación Est.", f"Bs {df_pedidos['Subtotal'].sum():,.2f}")
+criticos = len(df_inv[df_inv[COL_STOCK_INV] < 5])
+m4.metric("Alertas Stock", f"{criticos} SKU",
+          delta="- Crítico" if criticos > 0 else "OK",
+          delta_color="inverse" if criticos > 0 else "normal")
 
 st.markdown("---")
 
-# ── FILTROS ───────────────────────────────────────────────────────────────────
 st.markdown("### 🔍 Filtros de Búsqueda")
 c_f1, c_f2, c_f3 = st.columns([1, 1, 2])
 
 with c_f1:
-    opciones_emp   = df_pedidos['Empresa'].unique().tolist() if 'Empresa' in df_pedidos.columns else []
+    opciones_emp   = sorted(df_pedidos['Empresa'].dropna().unique().tolist()) if 'Empresa' in df_pedidos.columns else []
     emp_sel        = st.multiselect("Filtrar por Empresa:", opciones_emp, default=opciones_emp)
 with c_f2:
-    opciones_linea = df_pedidos['Línea'].unique().tolist() if 'Línea' in df_pedidos.columns else []
+    opciones_linea = sorted(df_pedidos['Línea'].dropna().unique().tolist()) if 'Línea' in df_pedidos.columns else []
     linea_sel      = st.multiselect("Filtrar por Línea:", opciones_linea, default=opciones_linea)
 with c_f3:
-    busqueda = st.text_input("Buscar por Empleado o Producto:", placeholder="Ej: Juan Perez / Coca Cola")
+    busqueda = st.text_input("Buscar por Empleado o Producto:", placeholder="Ej: Juan / Scotch Brite")
 
 df_filtrado = df_pedidos.copy()
 if emp_sel:
@@ -131,65 +155,70 @@ if emp_sel:
 if linea_sel:
     df_filtrado = df_filtrado[df_filtrado['Línea'].isin(linea_sel)]
 if busqueda:
-    df_filtrado = df_filtrado[
-        df_filtrado['Nombre Empleado'].str.contains(busqueda, case=False, na=False) |
-        df_filtrado['Nombre Producto'].str.contains(busqueda, case=False, na=False)
-    ]
+    col_emp_nom  = "Nombre Empleado" if "Nombre Empleado" in df_filtrado.columns else df_filtrado.columns[1]
+    col_prod_nom = "Nombre Producto" if "Nombre Producto" in df_filtrado.columns else df_filtrado.columns[2]
+    mascara = df_filtrado[col_prod_nom].astype(str).str.contains(busqueda, case=False, na=False)
+    mascara |= df_filtrado[col_emp_nom].astype(str).str.contains(busqueda, case=False, na=False)
+    df_filtrado = df_filtrado[mascara]
 
-# ── TABLA ─────────────────────────────────────────────────────────────────────
 st.markdown("### 📋 Historial Consolidado")
-st.dataframe(
-    df_filtrado,
-    use_container_width=True,
-    height=450,
-    column_config={
-        "Subtotal":        st.column_config.NumberColumn(format="Bs %.2f"),
-        "Monto Uni":       st.column_config.NumberColumn(format="Bs %.2f"),
-        "Fecha Registro":  st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm")
-    }
-)
+config_cols = {
+    "Subtotal": st.column_config.NumberColumn(label="Subtotal", format="Bs %,.2f"),
+    "Cantidad": st.column_config.NumberColumn(label="Cantidad", format="%d ud."),
+}
+if COL_PRECIO_PEDIDO in df_filtrado.columns:
+    config_cols[COL_PRECIO_PEDIDO] = st.column_config.NumberColumn(label="Precio Unitario", format="Bs %,.2f")
+if COL_FECHA_PEDIDO in df_filtrado.columns:
+    config_cols[COL_FECHA_PEDIDO]  = st.column_config.DatetimeColumn(label="Fecha y Hora", format="DD/MM/YYYY HH:mm")
 
-# ── GRÁFICOS ──────────────────────────────────────────────────────────────────
+st.dataframe(df_filtrado, use_container_width=True, height=420, column_config=config_cols)
+
 st.markdown("---")
 st.markdown("### 📈 Análisis de Demanda")
 g1, g2 = st.columns(2)
+col_prod_agrup = "Nombre Producto" if "Nombre Producto" in df_filtrado.columns else df_filtrado.columns[2]
 
 with g1:
     st.write("**Top 5 Productos más Solicitados**")
-    top_prods = df_pedidos.groupby('Nombre Producto')['Cantidad'].sum().sort_values(ascending=False).head(5)
-    st.bar_chart(top_prods)
+    if not df_filtrado.empty:
+        top = df_filtrado.groupby(col_prod_agrup)['Cantidad'].sum().sort_values(ascending=False).head(5)
+        st.bar_chart(top, color="#E63946")
+    else:
+        st.info("Sin datos para la selección actual.")
+
 with g2:
-    st.write("**Pedidos por Línea de Negocio**")
-    if 'Línea' in df_pedidos.columns:
-        st.bar_chart(df_pedidos.groupby('Línea').size())
+    st.write("**Volumen por Línea de Negocio**")
+    if 'Línea' in df_filtrado.columns and not df_filtrado.empty:
+        st.bar_chart(df_filtrado.groupby('Línea')['Cantidad'].sum().sort_values(ascending=False), color="#1A1A2E")
+    else:
+        st.info("Sin datos por línea.")
 
-# ── EXPORTACIÓN ───────────────────────────────────────────────────────────────
 st.markdown("---")
-st.markdown("### 📥 Reportes")
-exp_col1, exp_col2, exp_col3 = st.columns([1, 1, 2])
+st.markdown("### 📥 Reportes y Sincronización")
+e1, e2, e3 = st.columns([1, 1, 2])
 
-with exp_col1:
-    if st.button("🔄 Actualizar Datos Ahora", use_container_width=True):
-        # Borrar session_state del dashboard para forzar recarga fresca
+with e1:
+    if st.button("🔄 Sincronizar Sheets Ahora", use_container_width=True):
         for k in ['df_inv_dashboard', 'df_pedidos_dashboard', 'dashboard_timestamp']:
             st.session_state.pop(k, None)
         st.rerun()
 
-with exp_col2:
-    csv = df_filtrado.to_csv(index=False, encoding='utf-8-sig')
-    st.download_button(
-        label="📥 Descargar CSV",
-        data=csv,
-        file_name=f"Reporte_Consolidado_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime="text/csv",
-        use_container_width=True
-    )
+with e2:
+    try:
+        csv = df_filtrado.to_csv(index=False, encoding='utf-8-sig')
+        st.download_button(
+            label="📥 Exportar CSV", data=csv,
+            file_name=f"Reporte_PROESA_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv", use_container_width=True
+        )
+    except Exception:
+        st.button("📥 Exportar CSV", disabled=True, use_container_width=True)
 
-with exp_col3:
+with e3:
     st.info("💡 Los datos se actualizan automáticamente cada 5 minutos o al presionar el botón.")
 
 st.markdown("""
 <div style="text-align:center;color:#9CA3AF;margin-top:3rem;font-size:0.8rem;">
-    Sistema de Gestión Outlet PROESA v2.0 - Trade Marketing Dashboard
+    Sistema de Gestión Outlet PROESA v2.0 - Trade Marketing · 2026
 </div>
 """, unsafe_allow_html=True)

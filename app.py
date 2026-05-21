@@ -5,31 +5,29 @@ import base64
 from src.database import cargar_inventario, guardar_inventario_maestro
 from src.nav import render_nav
 
-st.set_page_config(page_title="Outlet PROESA", layout="wide", page_icon="📦")
+st.set_page_config(
+    page_title="Outlet PROESA",
+    layout="wide",
+    page_icon="📦",
+    initial_sidebar_state="expanded"
+)
 
 PATH_INV_SISTEMA = "data/inventario_maestro.xlsx"
 
-# ── ESTILOS GLOBALES ────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
 .block-container {
-        padding-top: 1rem !important;
-        padding-bottom: 0rem !important;
-        margin-top: -20px;
-    }
-html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
+    padding-top: 1rem !important;
+    padding-bottom: 0rem !important;
+    margin-top: -20px;
 }
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .stApp { background: #F5F4F0; }
 .hero-header {
     background: linear-gradient(135deg, #1A1A2E 0%, #16213E 60%, #0F3460 100%);
-    border-radius: 16px;
-    padding: 2rem 2.5rem;
-    margin-bottom: 1.5rem;
-    display: flex;
-    align-items: center;
-    gap: 1.5rem;
+    border-radius: 16px; padding: 2rem 2.5rem; margin-bottom: 1.5rem;
+    display: flex; align-items: center; gap: 1.5rem;
     box-shadow: 0 8px 32px rgba(26,26,46,0.18);
 }
 .hero-header h1 { color: #FFFFFF; font-size: 2rem; font-weight: 600; margin: 0; letter-spacing: -0.5px; }
@@ -57,19 +55,23 @@ html, body, [class*="css"] {
 .empresa-chip { display: inline-block; background: #F0F0F5; color: #444; border-radius: 20px; padding: 2px 10px; font-size: 0.75rem; font-weight: 500; margin: 1px; }
 [data-testid="stFileUploadDropzone"] { background: #FAFAFA !important; border: 2px dashed #C8C8D0 !important; border-radius: 12px !important; }
 .section-title { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #888; margin: 1.5rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 2px solid #EBEBEB; }
-#MainMenu, header, footer { visibility: hidden; }
+
+/* ── Ocultar chrome de Streamlit SIN dejar barra blanca ── */
+#MainMenu, footer { visibility: hidden; }
+header {
+    visibility: hidden;
+    height: 0 !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+}
 .stAppViewContainer footer { display: none !important; }
-footer { display: none !important; }
 [data-testid="stDecoration"] { display: none !important; }
-.reportview-container footer { display: none !important; }
-[data-testid="stToolbar"] { display: none !important; }
-.stDeployButton { display: none !important; }
-div[data-testid="stAppViewContainer"] > footer { display: none !important; }
+[data-testid="stToolbar"]    { display: none !important; }
+.stDeployButton              { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── LOGO (cacheado una sola vez en toda la sesión) ───────────────────────────
 @st.cache_data(show_spinner=False)
 def get_logo_b64(path="assets/logo_proesa.png"):
     try:
@@ -95,9 +97,6 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 
-# ── INVENTARIO: leer una vez y guardar en session_state ─────────────────────
-# La próxima vez que el usuario navegue de vuelta a esta página,
-# el df ya estará en memoria y no se releerá el Excel.
 if 'df_inventario_maestro' not in st.session_state:
     if os.path.exists(PATH_INV_SISTEMA):
         st.session_state.df_inventario_maestro = pd.read_excel(PATH_INV_SISTEMA)
@@ -115,22 +114,21 @@ if df_inv is None:
     if archivo:
         df_temp = cargar_inventario(archivo)
         guardar_inventario_maestro(df_temp)
-        # Guardar también en session_state para que otras páginas lo tengan
         st.session_state.df_inventario_maestro = df_temp
         st.success("✅ Inventario cargado con éxito.")
         st.rerun()
     st.stop()
 
 
-# ── MÉTRICAS ─────────────────────────────────────────────────────────────────
 stock_col   = df_inv.columns[3]
 precio_col  = df_inv.columns[4]
 empresa_col = df_inv.columns[5]
 
 total_prods = len(df_inv)
-total_stock = int(df_inv[stock_col].sum())
-valor_total = df_inv[stock_col].mul(df_inv[precio_col]).sum()
-sin_stock   = int((df_inv[stock_col] <= 0).sum())
+total_stock = int(pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0).sum())
+valor_total = pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0).mul(
+              pd.to_numeric(df_inv[precio_col], errors='coerce').fillna(0)).sum()
+sin_stock   = int((pd.to_numeric(df_inv[stock_col], errors='coerce').fillna(0) <= 0).sum())
 n_empresas  = df_inv[empresa_col].nunique()
 
 col1, col2, col3, col4 = st.columns(4)
@@ -165,8 +163,6 @@ with col4:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-
-# ── CATÁLOGO ─────────────────────────────────────────────────────────────────
 st.markdown('<div class="section-title">🔍 Catálogo de Productos</div>', unsafe_allow_html=True)
 
 col_filtro, col_busqueda = st.columns([1, 2])
@@ -184,7 +180,10 @@ if busqueda:
     df_mostrar = df_mostrar[df_mostrar[nombre_col].str.contains(busqueda, case=False, na=False)]
 
 def resaltar_stock(row):
-    stock = row.iloc[3]
+    try:
+        stock = float(str(row.iloc[3]).replace(',', ''))
+    except Exception:
+        stock = 0
     if stock <= 0:
         return ['background-color: #FEE2E2'] * len(row)
     elif stock <= 5:

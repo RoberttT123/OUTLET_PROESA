@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import base64
 import os
 
@@ -177,9 +178,22 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
             """, unsafe_allow_html=True)
 
             col1, col2 = st.columns(2)
-            total   = len(df_stats)
-            agotado = int((df_stats.iloc[:, 3] <= 0).sum())
-            bajo    = int(((df_stats.iloc[:, 3] > 0) & (df_stats.iloc[:, 3] <= 5)).sum())
+            total = len(df_stats)
+            
+            # ── PROTECCIÓN TRANSACCIONAL CONTRA EL TYPEERROR ──
+            try:
+                # Forzamos la limpieza de la columna número 3 (Stock), eliminando comas y convirtiendo a float/int
+                stock_numerico = pd.to_numeric(
+                    df_stats.iloc[:, 3].astype(str).str.replace(',', '', regex=False).str.strip(),
+                    errors='coerce'
+                ).fillna(0)
+                
+                agotado = int((stock_numerico <= 0).sum())
+                bajo    = int(((stock_numerico > 0) & (stock_numerico <= 5)).sum())
+            except Exception:
+                # Si las columnas del DataFrame vienen alteradas o vacías, evitamos que caiga la aplicación
+                agotado = 0
+                bajo    = 0
 
             col1.metric("Productos", f"{total:,}")
             col2.metric("Agotados",  agotado)
