@@ -13,11 +13,49 @@ Desarrollado para: PROYECTO_OUTLET
 import streamlit as st
 import pandas as pd
 import base64
+import hashlib
 from datetime import datetime
 
 # ==============================================================================
 # 1. CONFIGURACIÓN EXTERNA DE HOJAS DE CÁLCULO
 # ==============================================================================
+# ==============================================================================
+# CLOUDINARY - IMÁGENES DINÁMICAS
+# ==============================================================================
+
+CLOUDINARY_CLOUD_NAME = "df4qxsdtz"
+
+NOMBRES_IMAGENES_CLOUDINARY = [str(i) for i in range(1, 10)]
+
+CLOUDINARY_VERSION = "v1779347596"
+
+import hashlib
+
+def obtener_url_imagen_aleatoria_consistente(sku_codigo):
+    """
+    Asigna una imagen pseudoaleatoria PERO FIJA
+    usando hash del SKU.
+    """
+
+    if not sku_codigo:
+        return "https://via.placeholder.com/300x300?text=Sin+Imagen"
+
+    # Hash estable
+    hash_object = hashlib.md5(str(sku_codigo).encode('utf-8'))
+    hash_int = int(hash_object.hexdigest(), 16)
+
+    # Elegir imagen fija
+    indice = hash_int % len(NOMBRES_IMAGENES_CLOUDINARY)
+
+    # Nombre imagen
+    nombre_archivo = NOMBRES_IMAGENES_CLOUDINARY[indice]
+
+    # URL Cloudinary
+    return (
+        f"https://res.cloudinary.com/"
+        f"{CLOUDINARY_CLOUD_NAME}/image/upload/"
+        f"{CLOUDINARY_VERSION}/{nombre_archivo}.jpg"
+    )
 try:
     from config import (
         INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME,
@@ -394,7 +432,7 @@ else:
                             precio = _parse_precio(reg[COL_PRECIO])
                             codigo = str(reg[COL_CODIGO]).strip()
                             nombre = str(reg[COL_NOMBRE]).strip()
-                            imagen = reg[COL_IMAGEN] if COL_IMAGEN and pd.notna(reg[COL_IMAGEN]) else ""
+                            imagen = obtener_url_imagen_aleatoria_consistente(codigo)
                         except Exception as e:
                             st.caption(f"⚠️ Error fila {idx}: {e}")
                             continue
@@ -467,7 +505,7 @@ else:
                 for pos, item in enumerate(st.session_state.carrito):
                     datos = indice_productos.get(item['producto'])
                     s_max = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
-                    foto  = datos[COL_IMAGEN] if datos is not None and COL_IMAGEN and COL_IMAGEN in datos else ""
+                    foto = obtener_url_imagen_aleatoria_consistente(item['codigo_producto'])
 
                     # Ajuste automático si el stock bajó desde que se agregó al carrito
                     cantidad_guardada = int(item['cantidad'])

@@ -9,6 +9,7 @@ __pycache__/
 *.pyo
 *.pyd
 
+imagenes_productos/
 # Archivos de configuración y secretos (MUY IMPORTANTE)
 credentials.json
 .streamlit/secrets.toml
