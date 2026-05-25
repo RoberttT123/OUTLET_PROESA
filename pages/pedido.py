@@ -2,10 +2,6 @@
 """
 MÓDULO DE INTERFAZ DE USUARIO Y GESTIÓN DE PEDIDOS - OUTLET PROESA
 ----------------------------------------------------------------
-Controla el flujo de login de empleados, despliegue del catálogo de productos,
-gestión dinámica del carrito de compras con control de concurrencia in situ,
-y persistencia segura y atómica de pedidos en Google Sheets.
-
 Desarrollado para: PROYECTO_OUTLET
 Última actualización: Mayo 2026
 """
@@ -14,52 +10,36 @@ import streamlit as st
 import pandas as pd
 import base64
 import hashlib
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 # ==============================================================================
-# 1. CONFIGURACIÓN EXTERNA DE HOJAS DE CÁLCULO
+# 1. CLOUDINARY
 # ==============================================================================
-# ==============================================================================
-# CLOUDINARY - IMÁGENES DINÁMICAS
-# ==============================================================================
-
-CLOUDINARY_CLOUD_NAME = "df4qxsdtz"
-
+CLOUDINARY_CLOUD_NAME       = "df4qxsdtz"
 NOMBRES_IMAGENES_CLOUDINARY = [str(i) for i in range(1, 10)]
+CLOUDINARY_VERSION          = "v1779347596"
 
-CLOUDINARY_VERSION = "v1779347596"
 
-import hashlib
-
-def obtener_url_imagen_aleatoria_consistente(sku_codigo):
-    """
-    Asigna una imagen pseudoaleatoria PERO FIJA
-    usando hash del SKU.
-    """
-
+def obtener_url_imagen_aleatoria_consistente(sku_codigo: str) -> str:
     if not sku_codigo:
         return "https://via.placeholder.com/300x300?text=Sin+Imagen"
-
-    # Hash estable
-    hash_object = hashlib.md5(str(sku_codigo).encode('utf-8'))
-    hash_int = int(hash_object.hexdigest(), 16)
-
-    # Elegir imagen fija
-    indice = hash_int % len(NOMBRES_IMAGENES_CLOUDINARY)
-
-    # Nombre imagen
-    nombre_archivo = NOMBRES_IMAGENES_CLOUDINARY[indice]
-
-    # URL Cloudinary
+    hash_int = int(hashlib.md5(str(sku_codigo).encode("utf-8")).hexdigest(), 16)
+    indice   = hash_int % len(NOMBRES_IMAGENES_CLOUDINARY)
+    nombre   = NOMBRES_IMAGENES_CLOUDINARY[indice]
     return (
         f"https://res.cloudinary.com/"
         f"{CLOUDINARY_CLOUD_NAME}/image/upload/"
-        f"{CLOUDINARY_VERSION}/{nombre_archivo}.jpg"
+        f"{CLOUDINARY_VERSION}/{nombre}.jpg"
     )
+
+
+# ==============================================================================
+# 2. IMPORTS
+# ==============================================================================
 try:
     from config import (
         INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME,
-        PEDIDOS_SHEET_URL,    PEDIDOS_HOJA_NAME
+        PEDIDOS_SHEET_URL,    PEDIDOS_HOJA_NAME,
     )
 except ImportError:
     st.error("❌ Archivo `config.py` no encontrado en la raíz del proyecto.")
@@ -76,16 +56,19 @@ try:
     from src.database import obtener_datos_empleado, validar_empleado
     from src.componentes import cargar_estilos_css, render_tarjeta_producto
 except ImportError as e:
-    st.error("❌ Error cargando los módulos esenciales desde el directorio `src/`.")
+    st.error("❌ Error cargando módulos esenciales desde `src/`.")
     st.code(str(e))
     st.stop()
 
+# ==============================================================================
+# 3. PAGE CONFIG Y CSS
+# ==============================================================================
 try:
     st.set_page_config(
         page_title="Mi Pedido - Outlet PROESA",
         layout="wide",
         page_icon="🛒",
-        initial_sidebar_state="collapsed"
+        initial_sidebar_state="collapsed",
     )
 except Exception:
     pass
@@ -95,7 +78,6 @@ try:
 except Exception as e:
     st.warning(f"⚠️ Estilos CSS base no aplicados: {e}")
 
-# CSS extra: tabs via radio + alertas de stock
 st.markdown("""
 <style>
 div[data-testid="stRadio"] {
@@ -139,31 +121,44 @@ div[data-testid="stRadio"] div[data-baseweb="radio"] > div:first-child { display
     margin-top: 1.2rem;
     box-shadow: 0 2px 4px rgba(230, 57, 70, 0.05);
 }
-.alerta-stock-titulo {
-    color: #E63946;
-    font-size: 1.05rem;
-    font-weight: 600;
-    margin-bottom: 0.6rem;
-}
-.alerta-stock-lista {
-    color: #4A4A4A;
-    font-size: 0.92rem;
-    line-height: 1.4;
-    margin-bottom: 0.8rem;
-    padding-left: 1.1rem;
-}
+.alerta-stock-titulo  { color: #E63946; font-size: 1.05rem; font-weight: 600; margin-bottom: 0.6rem; }
+.alerta-stock-lista   { color: #4A4A4A; font-size: 0.92rem; line-height: 1.4; margin-bottom: 0.8rem; padding-left: 1.1rem; }
 .alerta-stock-sugerencia {
-    color: #666;
-    font-size: 0.88rem;
-    border-top: 1px dashed #F3C6C9;
-    padding-top: 0.6rem;
+    color: #666; font-size: 0.88rem;
+    border-top: 1px dashed #F3C6C9; padding-top: 0.6rem;
 }
+
+/* ── Fila de producto dentro del expander ── */
+.prod-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.55rem 0.2rem;
+    border-bottom: 1px solid #F0F0F0;
+}
+.prod-row:last-child { border-bottom: none; }
+.prod-nombre { font-size: 0.88rem; color: #1A1A2E; font-weight: 500; flex: 1; }
+.prod-qty    { font-size: 0.82rem; color: #666; margin: 0 1rem; white-space: nowrap; }
+.prod-total  { font-size: 0.9rem; font-weight: 700; color: #E63946; white-space: nowrap; }
+
+/* ── Chip de resumen en el expander ── */
+.chip {
+    display: inline-block;
+    background: #F0F4FF;
+    color: #1A1A2E;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 20px;
+    margin-left: 0.5rem;
+}
+.chip-red { background: #FFF0F0; color: #E63946; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ==============================================================================
-# 2. LOGO
+# 4. LOGO
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def get_logo_b64(path="assets/logo_proesa.png"):
@@ -175,16 +170,18 @@ def get_logo_b64(path="assets/logo_proesa.png"):
 
 
 # ==============================================================================
-# 3. SESSION STATE
+# 5. SESSION STATE
 # ==============================================================================
 defaults = {
-    'logged_in': False,
-    'cod_emp':   None,
-    'nom_emp':   None,
-    'empresa':   None,
-    'regional':  None,
-    'carrito':   [],
-    'tab_idx':   0,   # 0=Catálogo  1=Carrito  2=Historial
+    "logged_in":  False,
+    "cod_emp":    None,
+    "nom_emp":    None,
+    "empresa":    None,
+    "regional":   None,
+    "carrito":    [],
+    "tab_idx":    0,
+    "toast_msg":  None,
+    "toast_icon": None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -192,25 +189,46 @@ for k, v in defaults.items():
 
 
 # ==============================================================================
-# 4. PARSEO ROBUSTO
+# 6. PARSEO ROBUSTO
 # ==============================================================================
 def _parse_stock(v) -> int:
     try:
-        return max(0, int(float(str(v).strip().replace(',', ''))))
+        return max(0, int(float(str(v).strip().replace(",", ""))))
     except Exception:
         return 0
 
 def _parse_precio(v) -> float:
     try:
-        return float(str(v).strip().replace(',', '.'))
+        return float(str(v).strip().replace(",", "."))
     except Exception:
         return 0.0
 
+def _parsear_fecha(valor_str: str) -> date | None:
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(str(valor_str).strip(), fmt).date()
+        except Exception:
+            pass
+    return None
+
+def _etiqueta_relativa(d: date) -> str:
+    """Devuelve etiqueta legible para una fecha (Hoy, Ayer, día de semana, o fecha)."""
+    hoy  = date.today()
+    diff = (hoy - d).days
+    if diff == 0:
+        return "Hoy"
+    if diff == 1:
+        return "Ayer"
+    if diff < 7:
+        dias = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
+        return dias[d.weekday()]
+    return d.strftime("%d/%m/%Y")
+
 
 # ==============================================================================
-# 5. INVENTARIO E ÍNDICE
+# 7. INVENTARIO E ÍNDICE
 # ==============================================================================
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def cargar_inventario():
     try:
         df = obtener_inventario_sheets(INVENTARIO_SHEET_URL, INVENTARIO_HOJA_NAME)
@@ -237,7 +255,6 @@ COL_STOCK  = "Stock"           if "Stock"           in df_inv.columns else df_in
 COL_PRECIO = "Precio Unitario" if "Precio Unitario" in df_inv.columns else df_inv.columns[4]
 COL_LINEA  = "Línea"           if "Línea"           in df_inv.columns else df_inv.columns[0]
 COL_EMP    = "Empresa"         if "Empresa"         in df_inv.columns else df_inv.columns[5]
-COL_IMAGEN = "Imagen"          if "Imagen"          in df_inv.columns else None
 
 
 # ==============================================================================
@@ -247,7 +264,7 @@ if not st.session_state.logged_in:
     logo = get_logo_b64()
     st.markdown(f"""
     <div class="hero-login">
-        {f'<img src="data:image/png;base64,{logo}" style="height:210px;width:auto;object-fit:contain;margin-top:-20px;">' if logo else ''}
+        {f'<img src="data:image/png;base64,{logo}" style="height:210px;width:auto;object-fit:contain;margin-top:-20px;">' if logo else ""}
         <h1 style="margin-top:0;">Outlet PROESA</h1>
         <p style="margin-bottom:0;">Sistema de Pedidos Internos para Empleados</p>
     </div>
@@ -256,8 +273,9 @@ if not st.session_state.logged_in:
     with st.form("login_form"):
         st.subheader("🔑 Acceso al Sistema")
         cod = st.text_input(
-            "Código de Empleado", placeholder="Ej: E0200491",
-            help="Consulte con su supervisor si desconoce su código corporativo."
+            "Código de Empleado",
+            placeholder="Ej: E0200491",
+            help="Consulte con su supervisor si desconoce su código corporativo.",
         ).upper().strip()
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -266,12 +284,12 @@ if not st.session_state.logged_in:
                 with st.spinner("Consultando registros de personal..."):
                     try:
                         datos = obtener_datos_empleado(cod)
-                        if datos and datos.get('encontrado'):
+                        if datos and datos.get("encontrado"):
                             st.session_state.logged_in = True
                             st.session_state.cod_emp   = cod
-                            st.session_state.nom_emp   = datos.get('nombre', 'Empleado')
-                            st.session_state.empresa   = datos.get('empresa', 'N/A')
-                            st.session_state.regional  = datos.get('regional', 'N/A')
+                            st.session_state.nom_emp   = datos.get("nombre", "Empleado")
+                            st.session_state.empresa   = datos.get("empresa", "N/A")
+                            st.session_state.regional  = datos.get("regional", "N/A")
                             st.success("✅ Acceso autorizado.")
                             st.rerun()
                         else:
@@ -286,10 +304,14 @@ if not st.session_state.logged_in:
 # PANTALLA 2: PEDIDOS
 # ==============================================================================
 else:
-    # Toast de éxito que sobrevive al rerun
     if st.session_state.get("lanzar_toast_exito"):
         st.toast("🎉 ¡Tu pedido fue enviado con éxito!", icon="🛒")
         del st.session_state["lanzar_toast_exito"]
+
+    if st.session_state.get("toast_msg"):
+        st.toast(st.session_state["toast_msg"], icon=st.session_state.get("toast_icon", "🛒"))
+        st.session_state["toast_msg"]  = None
+        st.session_state["toast_icon"] = None
 
     logo = get_logo_b64()
     st.markdown(f"""
@@ -310,9 +332,7 @@ else:
         except Exception:
             return pd.DataFrame()
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # FUNCIÓN TRANSACCIONAL (fuera del fragment para st.rerun() global)
-    # ──────────────────────────────────────────────────────────────────────────
+    # ── FUNCIÓN TRANSACCIONAL ────────────────────────────────────────────────
     def ejecutar_envio_transaccional(items):
         if "lista_productos_colision" in st.session_state:
             del st.session_state["lista_productos_colision"]
@@ -320,20 +340,17 @@ else:
         with st.status("Procesando tu pedido...", expanded=True) as estado:
             try:
                 st.write("🔍 Verificando disponibilidad y reservando stock...")
-
                 transaccion = procesar_descuento_stock_seguro(
                     items=[{
-                        "codigo_producto": i["codigo_producto"],
-                        "cantidad_a_restar": i["cantidad"]
+                        "codigo_producto":   i["codigo_producto"],
+                        "cantidad_a_restar": i["cantidad"],
                     } for i in items],
                     url_sheet=INVENTARIO_SHEET_URL,
-                    hoja=INVENTARIO_HOJA_NAME
+                    hoja=INVENTARIO_HOJA_NAME,
                 )
 
-                # ── FRACASO: stock insuficiente por concurrencia ───────────────
                 if not transaccion["exito"]:
                     estado.update(label="⚠️ Pedido rechazado por falta de stock.", state="error")
-
                     detalles_html = ""
                     for p in transaccion["sin_stock"]:
                         detalles_html += (
@@ -346,16 +363,14 @@ else:
                     st.rerun()
                     return False
 
-                # ── ÉXITO: stock apartado, guardar registro ───────────────────
                 st.write("📝 Guardando el registro oficial del pedido...")
                 ok = guardar_pedido_sheets(
                     st.session_state.cod_emp,
                     st.session_state.nom_emp,
                     items,
                     PEDIDOS_SHEET_URL,
-                    PEDIDOS_HOJA_NAME
+                    PEDIDOS_HOJA_NAME,
                 )
-
                 if ok:
                     st.session_state.carrito = []
                     st.session_state.tab_idx = 0
@@ -374,12 +389,10 @@ else:
                 st.error(f"Detalle: {e}")
                 return False
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # FRAGMENT CENTRAL
-    # ──────────────────────────────────────────────────────────────────────────
+    # ── FRAGMENT CENTRAL ─────────────────────────────────────────────────────
     @st.fragment
     def render_pedido():
-        total_uds = sum(int(i.get('cantidad', 0)) for i in st.session_state.carrito)
+        total_uds = sum(int(i.get("cantidad", 0)) for i in st.session_state.carrito)
         label_c   = f"🛒 Carrito ({total_uds})" if total_uds > 0 else "🛒 Carrito"
         opciones  = ["📦 Catálogo", label_c, "📋 Mis Pedidos"]
 
@@ -388,7 +401,7 @@ else:
             index=int(st.session_state.tab_idx),
             horizontal=True,
             label_visibility="collapsed",
-            key="radio_tabs_nav"
+            key="radio_tabs_nav",
         )
         st.session_state.tab_idx = opciones.index(tab_sel)
 
@@ -401,14 +414,14 @@ else:
             filtro = st.text_input(
                 "Filtrar catálogo:",
                 placeholder="Palabras clave, marcas o códigos SKU...",
-                key="busqueda_catalogo"
+                key="busqueda_catalogo",
             )
 
             if filtro:
-                expr = str(filtro).strip()
+                expr    = str(filtro).strip()
                 mascara = (
-                    df_inv[COL_NOMBRE].astype(str).str.contains(expr, case=False, na=False) |
-                    df_inv[COL_CODIGO].astype(str).str.strip().str.contains(expr, case=False, na=False)
+                    df_inv[COL_NOMBRE].astype(str).str.contains(expr, case=False, na=False)
+                    | df_inv[COL_CODIGO].astype(str).str.strip().str.contains(expr, case=False, na=False)
                 )
                 df_vista = df_inv[mascara].head(8)
             else:
@@ -418,7 +431,6 @@ else:
                 st.info("🔍 Ningún artículo coincide con los criterios introducidos.")
             else:
                 st.caption(f"Visualizando {len(df_vista)} ítems disponibles.")
-
                 for bloque in range(0, len(df_vista), 2):
                     cols = st.columns(2)
                     for j in range(2):
@@ -426,7 +438,6 @@ else:
                         if idx >= len(df_vista):
                             break
                         reg = df_vista.iloc[idx]
-
                         try:
                             stock  = _parse_stock(reg[COL_STOCK])
                             precio = _parse_precio(reg[COL_PRECIO])
@@ -450,7 +461,7 @@ else:
                         with cols[j]:
                             render_tarjeta_producto(
                                 codigo=codigo, nombre=nombre,
-                                precio=precio, stock_badge=badge, url_foto=imagen
+                                precio=precio, stock_badge=badge, url_foto=imagen,
                             )
                             if not bloqueado:
                                 c_num, c_btn = st.columns([1, 1.3])
@@ -459,20 +470,22 @@ else:
                                         "Cant", min_value=1, max_value=max(stock, 1),
                                         value=1, step=1,
                                         key=f"qty_{codigo}",
-                                        label_visibility="collapsed"
+                                        label_visibility="collapsed",
                                     )
-                                # ── FIX: c_btn al mismo nivel que c_num ───────
                                 with c_btn:
                                     if st.button("➕ Solicitar", key=f"add_{codigo}", use_container_width=True):
-                                        # Acumular si el producto ya está en el carrito
                                         item_existente = next(
                                             (i for i in st.session_state.carrito if i["codigo_producto"] == codigo),
-                                            None
+                                            None,
                                         )
                                         if item_existente:
                                             nueva_cant = min(item_existente["cantidad"] + int(cant), stock)
                                             if nueva_cant != item_existente["cantidad"] + int(cant):
-                                                st.toast(f"⚠️ Ajustado al stock máximo ({stock} ud.)", icon="💡")
+                                                st.session_state["toast_msg"]  = f"⚠️ Ajustado al stock máximo ({stock} ud.)"
+                                                st.session_state["toast_icon"] = "💡"
+                                            else:
+                                                st.session_state["toast_msg"]  = f"🔄 Cantidad de '{nombre}' actualizada en el carrito"
+                                                st.session_state["toast_icon"] = "🛒"
                                             item_existente["cantidad"] = nueva_cant
                                             item_existente["subtotal"] = nueva_cant * precio
                                         else:
@@ -483,6 +496,8 @@ else:
                                                 "precio_unitario": precio,
                                                 "subtotal":        precio * int(cant),
                                             })
+                                            st.session_state["toast_msg"]  = f"¡'{nombre}' agregado al carrito!"
+                                            st.session_state["toast_icon"] = "🛒"
                                         st.session_state.tab_idx = 0
                                         st.rerun(scope="fragment")
                             else:
@@ -503,51 +518,46 @@ else:
                 st.markdown('<div class="contenedor-carrito">', unsafe_allow_html=True)
 
                 for pos, item in enumerate(st.session_state.carrito):
-                    datos = indice_productos.get(item['producto'])
+                    datos = indice_productos.get(item["producto"])
                     s_max = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
-                    foto = obtener_url_imagen_aleatoria_consistente(item['codigo_producto'])
+                    foto  = obtener_url_imagen_aleatoria_consistente(item["codigo_producto"])
 
-                    # Ajuste automático si el stock bajó desde que se agregó al carrito
-                    cantidad_guardada = int(item['cantidad'])
+                    cantidad_guardada = int(item["cantidad"])
                     if cantidad_guardada > s_max:
                         cantidad_guardada = max(1, s_max)
-                        st.session_state.carrito[pos]['cantidad'] = cantidad_guardada
-                        st.session_state.carrito[pos]['subtotal'] = cantidad_guardada * item['precio_unitario']
+                        st.session_state.carrito[pos]["cantidad"] = cantidad_guardada
+                        st.session_state.carrito[pos]["subtotal"] = cantidad_guardada * item["precio_unitario"]
                         st.warning(f"⚠️ Stock de **{item['producto']}** reajustado al máximo disponible ({s_max} ud.).")
 
                     c_info, c_cant, c_del = st.columns([2.5, 1.2, 0.4])
-
                     with c_info:
                         html_item = render_estructura_item_carrito(
-                            nombre=item['producto'],
-                            precio_total=item['subtotal'],
-                            url_foto=foto
+                            nombre=item["producto"],
+                            precio_total=item["subtotal"],
+                            url_foto=foto,
                         )
                         st.markdown(f'<div class="item-carrito">{html_item}</div>', unsafe_allow_html=True)
-
                     with c_cant:
                         st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
                         nueva_cant = st.number_input(
                             "Cant", min_value=1, max_value=max(s_max, 1),
                             value=cantidad_guardada, step=1,
-                            key=f"cant_{pos}", label_visibility="collapsed"
+                            key=f"cant_{pos}", label_visibility="collapsed",
                         )
-                        if int(nueva_cant) != int(item['cantidad']):
-                            st.session_state.carrito[pos]['cantidad'] = int(nueva_cant)
-                            st.session_state.carrito[pos]['subtotal'] = int(nueva_cant) * item['precio_unitario']
-                            st.session_state.tab_idx = 1   # quedarse en carrito
+                        if int(nueva_cant) != int(item["cantidad"]):
+                            st.session_state.carrito[pos]["cantidad"] = int(nueva_cant)
+                            st.session_state.carrito[pos]["subtotal"] = int(nueva_cant) * item["precio_unitario"]
+                            st.session_state.tab_idx = 1
                             st.rerun(scope="fragment")
-
                     with c_del:
                         st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
                         if st.button("🗑️", key=f"del_{pos}", help="Eliminar ítem"):
                             st.session_state.carrito.pop(pos)
-                            st.session_state.tab_idx = 1   # quedarse en carrito
+                            st.session_state.tab_idx = 1
                             st.rerun(scope="fragment")
 
-                st.markdown('</div>', unsafe_allow_html=True)
-
-                total = sum(float(i['subtotal']) for i in st.session_state.carrito)
+                st.markdown("</div>", unsafe_allow_html=True)
+                total = sum(float(i["subtotal"]) for i in st.session_state.carrito)
                 st.markdown(f"""
                 <hr style='border-color:#EBEBEB;margin:1rem 0;'>
                 <div class="carrito-total-clon">
@@ -556,21 +566,20 @@ else:
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Compilar items para el envío
                 lista_envio = []
                 for item in st.session_state.carrito:
-                    fila = indice_productos.get(item['producto'])
+                    fila = indice_productos.get(item["producto"])
                     if fila is None:
                         continue
                     lista_envio.append({
                         "codigo_producto": str(fila[COL_CODIGO]),
-                        "producto":        str(item['producto']),
-                        "cantidad":        int(item['cantidad']),
-                        "precio_unitario": float(item['precio_unitario']),
+                        "producto":        str(item["producto"]),
+                        "cantidad":        int(item["cantidad"]),
+                        "precio_unitario": float(item["precio_unitario"]),
                         "linea":           str(fila[COL_LINEA]),
                         "descuento":       0,
                         "stock_actual":    _parse_stock(fila[COL_STOCK]),
-                        "empresa":         st.session_state.empresa or str(fila[COL_EMP])
+                        "empresa":         st.session_state.empresa or str(fila[COL_EMP]),
                     })
 
                 if st.button("REALIZAR PEDIDO", type="primary",
@@ -578,16 +587,11 @@ else:
                     if lista_envio:
                         ejecutar_envio_transaccional(lista_envio)
 
-                # Alerta de colisión de stock (se muestra después del botón)
                 if "lista_productos_colision" in st.session_state:
                     st.markdown(f"""
                     <div class="alerta-stock-container">
-                        <div class="alerta-stock-titulo">
-                            🚫 No se pudo enviar tu pedido por falta de existencias
-                        </div>
-                        <ul class="alerta-stock-lista">
-                            {st.session_state["lista_productos_colision"]}
-                        </ul>
+                        <div class="alerta-stock-titulo">🚫 No se pudo enviar tu pedido por falta de existencias</div>
+                        <ul class="alerta-stock-lista">{st.session_state["lista_productos_colision"]}</ul>
                         <div class="alerta-stock-sugerencia">
                             💡 <b>Sugerencia:</b> Reduce la cantidad o elimina el producto agotado para procesar el resto.
                         </div>
@@ -595,55 +599,159 @@ else:
                     """, unsafe_allow_html=True)
 
         # ══════════════════════════════════════════════════════════════════════
-        # TAB 2 — HISTORIAL
-        # ══════════════════════════════════════════════════════════════════════
-# ══════════════════════════════════════════════════════════════════════
-        # TAB 2 — HISTORIAL
+        # TAB 2 — HISTORIAL: acordeón por fecha, sin imágenes
         # ══════════════════════════════════════════════════════════════════════
         elif st.session_state.tab_idx == 2:
-            st.markdown('<div class="section-title">📋 Registro Histórico de Compras</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-title">📋 Mis Pedidos</div>', unsafe_allow_html=True)
+
             df_hist = cargar_historial(st.session_state.cod_emp)
-            
-            if df_hist is not None and not df_hist.empty:
-                st.caption("Últimos artículos solicitados (orden cronológico descendente):")
-                
-                # Detectar las columnas correctas dinámicamente
-                col_monto = "Precio Unitario" if "Precio Unitario" in df_hist.columns else ("Monto Uni" if "Monto Uni" in df_hist.columns else None)
-                
-                for _, p in df_hist.tail(10).iloc[::-1].iterrows():
-                    # 1. Extraer precio guardado
-                    precio_historico = 0.0
-                    if col_monto and pd.notna(p[col_monto]):
-                        try:
-                            precio_historico = float(str(p[col_monto]).replace(',', '.'))
-                            # Escudo por si quedó algún registro antiguo con el formato roto
-                            if precio_historico in [601.0, 3012.0, 255.0, 312.0, 760.0] or precio_historico >= 1000.0:
-                                precio_historico = precio_historico / 100.0
-                        except Exception:
-                            precio_historico = 0.0
 
-                    cantidad = int(p.get('Cantidad', 0))
-                    subtotal_historico = precio_historico * cantidad
-
-                    # 2. Renderizar la información con el precio incluido
-                    st.markdown(
-                        f"📦 **{p.get('Nombre Producto','N/A')}**<br>"
-                        f"🔢 {cantidad} ud. × Bs {precio_historico:,.2f} — **Total: Bs {subtotal_historico:,.2f}**<br>"
-                        f"📅 <small style='color:#777'>{p.get('Fecha Registro','N/A')}</small>",
-                        unsafe_allow_html=True
-                    )
-                    st.markdown("<hr style='margin:0.4rem 0;border-style:dashed;border-color:#E0E0E0;'>",
-                                unsafe_allow_html=True)
-            else:
+            if df_hist is None or df_hist.empty:
                 st.info("No se registran transacciones previas en su cuenta.")
+            else:
+                # Detectar columna de precio
+                col_monto = next(
+                    (c for c in ("Precio Unitario", "Monto Uni") if c in df_hist.columns),
+                    None,
+                )
+
+                # Parsear fechas y ordenar más reciente primero
+                df_h = df_hist.copy()
+                df_h["_fecha_obj"] = df_h.get("Fecha Registro", pd.Series(dtype=str)).apply(
+                    lambda v: _parsear_fecha(str(v))
+                )
+                df_h = df_h.sort_values("_fecha_obj", ascending=False, na_position="last")
+
+                # Agrupar por fecha exacta (un expander por día)
+                fechas_unicas = df_h["_fecha_obj"].dropna().unique()
+
+                # Resumen general arriba
+                total_productos = len(df_h)
+                total_bs = 0.0
+                if col_monto:
+                    for _, r in df_h.iterrows():
+                        try:
+                            p = float(r[col_monto]) if pd.notna(r[col_monto]) else 0.0
+                            q = int(r.get("Cantidad", 0))
+                            total_bs += p * q
+                        except Exception:
+                            pass
+
+                st.markdown(f"""
+                <div style="background:#F8F9FF;border-radius:10px;padding:0.8rem 1.1rem;
+                            margin-bottom:1rem;display:flex;gap:2rem;flex-wrap:wrap;">
+                    <div>
+                        <div style="font-size:0.7rem;color:#888;text-transform:uppercase;
+                                    letter-spacing:1px;font-weight:600;">Total pedidos</div>
+                        <div style="font-size:1.4rem;font-weight:700;color:#1A1A2E;">
+                            {total_productos} productos
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-size:0.7rem;color:#888;text-transform:uppercase;
+                                    letter-spacing:1px;font-weight:600;">Monto total</div>
+                        <div style="font-size:1.4rem;font-weight:700;color:#E63946;">
+                            Bs {total_bs:,.2f}
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-size:0.7rem;color:#888;text-transform:uppercase;
+                                    letter-spacing:1px;font-weight:600;">Días con pedidos</div>
+                        <div style="font-size:1.4rem;font-weight:700;color:#1A1A2E;">
+                            {len(fechas_unicas)}
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Un expander por cada fecha distinta
+                for fecha_obj in fechas_unicas:
+                    df_dia = df_h[df_h["_fecha_obj"] == fecha_obj]
+
+                    # Calcular totales del día para el header del expander
+                    n_prods   = len(df_dia)
+                    total_dia = 0.0
+                    if col_monto:
+                        for _, r in df_dia.iterrows():
+                            try:
+                                p = float(r[col_monto]) if pd.notna(r[col_monto]) else 0.0
+                                q = int(r.get("Cantidad", 0))
+                                total_dia += p * q
+                            except Exception:
+                                pass
+
+                    etiqueta  = _etiqueta_relativa(fecha_obj)
+                    fecha_fmt = fecha_obj.strftime("%d/%m/%Y")
+                    # El primer expander (más reciente) abre por defecto
+                    es_primero = (fecha_obj == fechas_unicas[0])
+
+                    label_exp = (
+                        f"📅 {etiqueta}  —  {fecha_fmt}"
+                        f"   ·   {n_prods} producto{'s' if n_prods != 1 else ''}"
+                        f"   ·   Bs {total_dia:,.2f}"
+                    )
+
+                    with st.expander(label_exp, expanded=es_primero):
+                        # Encabezado de columnas
+                        h1, h2, h3, h4 = st.columns([3.5, 1, 1.3, 1.3])
+                        h1.markdown("**Producto**")
+                        h2.markdown("**Cant.**")
+                        h3.markdown("**P. Unit.**")
+                        h4.markdown("**Subtotal**")
+                        st.markdown(
+                            "<hr style='margin:0.3rem 0 0.5rem;border-color:#E8E8E8;'>",
+                            unsafe_allow_html=True,
+                        )
+
+                        # Filas de productos
+                        for _, row in df_dia.iterrows():
+                            nombre_p = str(row.get("Nombre Producto", "N/A"))
+                            cantidad = int(row.get("Cantidad", 0))
+                            precio_u = 0.0
+                            if col_monto and pd.notna(row.get(col_monto)):
+                                try:
+                                    precio_u = float(row[col_monto])
+                                except Exception:
+                                    precio_u = 0.0
+                            subtotal = precio_u * cantidad
+
+                            c1, c2, c3, c4 = st.columns([3.5, 1, 1.3, 1.3])
+                            c1.markdown(f"<span style='font-size:0.87rem'>{nombre_p}</span>",
+                                        unsafe_allow_html=True)
+                            c2.markdown(f"<span style='font-size:0.87rem;color:#555'>{cantidad} ud.</span>",
+                                        unsafe_allow_html=True)
+                            c3.markdown(f"<span style='font-size:0.87rem;color:#555'>Bs {precio_u:,.2f}</span>",
+                                        unsafe_allow_html=True)
+                            c4.markdown(f"<span style='font-size:0.9rem;font-weight:700;color:#E63946'>Bs {subtotal:,.2f}</span>",
+                                        unsafe_allow_html=True)
+                            st.markdown(
+                                "<hr style='margin:0.25rem 0;border-color:#F4F4F4;'>",
+                                unsafe_allow_html=True,
+                            )
+
+                        # Total del día al pie del expander
+                        st.markdown(
+                            f"<div style='text-align:right;padding-top:0.3rem;"
+                            f"font-size:0.9rem;color:#888;'>"
+                            f"Total del día: "
+                            f"<strong style='color:#1A1A2E;font-size:1rem;'>Bs {total_dia:,.2f}</strong>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+        # ── Toast pendiente ───────────────────────────────────────────────────
+        if st.session_state.get("toast_msg"):
+            st.toast(st.session_state["toast_msg"], icon=st.session_state.get("toast_icon", "🛒"))
+            st.session_state["toast_msg"]  = None
+            st.session_state["toast_icon"] = None
 
     render_pedido()
 
     # ── CERRAR SESIÓN ─────────────────────────────────────────────────────────
     st.markdown("<br><br>", unsafe_allow_html=True)
     if st.button("🚪 Cerrar Sesión", use_container_width=True):
-        for k in ['logged_in','cod_emp','nom_emp','empresa','regional','carrito','tab_idx']:
-            st.session_state[k] = False if k == 'logged_in' else ([] if k == 'carrito' else (0 if k == 'tab_idx' else None))
-        for extra in ["lista_productos_colision", "lanzar_toast_exito"]:
+        for k in ["logged_in", "cod_emp", "nom_emp", "empresa", "regional", "carrito", "tab_idx"]:
+            st.session_state[k] = False if k == "logged_in" else ([] if k == "carrito" else (0 if k == "tab_idx" else None))
+        for extra in ["lista_productos_colision", "lanzar_toast_exito", "toast_msg", "toast_icon"]:
             st.session_state.pop(extra, None)
         st.rerun()

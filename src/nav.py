@@ -6,10 +6,7 @@ import os
 
 @st.cache_data(show_spinner=False)
 def get_logo_b64(path="assets/logo_proesa.png"):
-    """
-    Carga el logo UNA sola vez y lo cachea para toda la sesión.
-    Sin este cache, el archivo se leía en cada cambio de página.
-    """
+    """Carga el logo UNA sola vez y lo cachea para toda la sesión."""
     try:
         with open(path, "rb") as f:
             return base64.b64encode(f.read()).decode()
@@ -17,13 +14,40 @@ def get_logo_b64(path="assets/logo_proesa.png"):
         return None
 
 
+@st.cache_data(show_spinner=False)
+def _calcular_stats_inventario(df: pd.DataFrame) -> dict:
+    """
+    Calcula stats del inventario cacheados por contenido del DataFrame.
+    @st.cache_data hashea el DataFrame automáticamente — solo recalcula
+    si los datos cambiaron. NO accede a st.session_state (no permitido
+    dentro de funciones cacheadas).
+    """
+    try:
+        stock_num = pd.to_numeric(
+            df.iloc[:, 3].astype(str).str.replace(",", "", regex=False).str.strip(),
+            errors="coerce",
+        ).fillna(0)
+        return {
+            "total":   len(df),
+            "agotado": int((stock_num <= 0).sum()),
+            "bajo":    int(((stock_num > 0) & (stock_num <= 5)).sum()),
+        }
+    except Exception:
+        return {"total": len(df), "agotado": 0, "bajo": 0}
+
+
 def render_nav(active_page: str = "inicio", inventario_df=None):
     """
     Renderiza la barra lateral de navegación.
-    active_page: "inicio" | "registro" | "dashboard"
-    inventario_df: DataFrame del inventario (opcional)
+    active_page : "inicio" | "registro" | "dashboard"
+    inventario_df : DataFrame del inventario (opcional)
+
+    NOTA: el bloque CSS debe re-inyectarse en cada render porque Streamlit
+    reconstruye la página completa en cada rerun. El flag de session_state
+    fue eliminado — era la causa de que la sidebar desapareciera.
     """
 
+    # ── CSS: se inyecta en cada render (requerido por Streamlit) ─────────────
     st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@500&display=swap');
@@ -122,13 +146,12 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
 
     with st.sidebar:
 
-        # ── LOGO (ya cacheado, no toca disco) ───────────────────────────────
+        # ── LOGO (cacheado en disco, no toca disco en reruns) ────────────────
         logo_b64 = get_logo_b64()
         if logo_b64:
             st.markdown(f"""
-            <div style="padding: 0.1rem 1rem 1rem;
-                        border-bottom: 1px solid #1A1A32;
-                        margin-bottom: 0.25rem; text-align: center;">
+            <div style="padding:0.1rem 1rem 1rem;border-bottom:1px solid #1A1A32;
+                        margin-bottom:0.25rem;text-align:center;">
                 <img src="data:image/png;base64,{logo_b64}"
                      style="width:85%;max-height:150px;object-fit:contain;margin:0 auto;">
                 <div style="margin-top:0.6rem;font-size:0.65rem;font-weight:700;
@@ -163,13 +186,13 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
 
         st.markdown("<hr style='margin:0.75rem 0'>", unsafe_allow_html=True)
 
-        # ── STATS DE INVENTARIO ──────────────────────────────────────────────
-        # Usa session_state si inventario_df no viene como argumento
-        df_stats = inventario_df
-        if df_stats is None:
-            df_stats = st.session_state.get('df_inventario_maestro')
+        # ── STATS DE INVENTARIO (cacheados por contenido del df) ─────────────
+        df_stats = inventario_df if inventario_df is not None \
+                   else st.session_state.get("df_inventario_maestro")
 
-        if df_stats is not None:
+        if df_stats is not None and not df_stats.empty:
+            stats = _calcular_stats_inventario(df_stats)
+
             st.markdown("""
             <div style="font-size:0.6rem;font-weight:800;text-transform:uppercase;
                         letter-spacing:2px;color:#2A3560;padding:0.5rem 1.1rem 0.35rem;">
@@ -178,34 +201,17 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
             """, unsafe_allow_html=True)
 
             col1, col2 = st.columns(2)
-            total = len(df_stats)
-            
-            # ── PROTECCIÓN TRANSACCIONAL CONTRA EL TYPEERROR ──
-            try:
-                # Forzamos la limpieza de la columna número 3 (Stock), eliminando comas y convirtiendo a float/int
-                stock_numerico = pd.to_numeric(
-                    df_stats.iloc[:, 3].astype(str).str.replace(',', '', regex=False).str.strip(),
-                    errors='coerce'
-                ).fillna(0)
-                
-                agotado = int((stock_numerico <= 0).sum())
-                bajo    = int(((stock_numerico > 0) & (stock_numerico <= 5)).sum())
-            except Exception:
-                # Si las columnas del DataFrame vienen alteradas o vacías, evitamos que caiga la aplicación
-                agotado = 0
-                bajo    = 0
+            col1.metric("Productos", f"{stats['total']:,}")
+            col2.metric("Agotados",  stats["agotado"])
 
-            col1.metric("Productos", f"{total:,}")
-            col2.metric("Agotados",  agotado)
-
-            if bajo > 0:
+            if stats["bajo"] > 0:
                 st.markdown(f"""
                 <div style="margin:0.4rem 0.75rem 0;
                             background:rgba(244,162,97,0.1);
                             border:1px solid rgba(244,162,97,0.25);
                             border-radius:8px;padding:0.45rem 0.75rem;
                             font-size:0.75rem;color:#C4823A !important;">
-                    ⚠️  <strong style="color:#C4823A !important;">{bajo}</strong>
+                    ⚠️ <strong style="color:#C4823A !important;">{stats['bajo']}</strong>
                     productos con stock bajo (≤5 ud.)
                 </div>
                 """, unsafe_allow_html=True)
@@ -220,12 +226,15 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
         </div>
         """, unsafe_allow_html=True)
 
-        PATH_INV = "data/inventario_maestro.xlsx"
-        if os.path.exists(PATH_INV):
+        if os.path.exists("data/inventario_maestro.xlsx"):
             if st.button("🔄  Resetear para Nuevo Mes"):
-                os.remove(PATH_INV)
-                # Limpiar también el session_state para que se recargue
-                st.session_state.pop('df_inventario_maestro', None)
+                try:
+                    os.remove("data/inventario_maestro.xlsx")
+                except Exception:
+                    pass
+                for key in ["df_inventario_maestro", "inv_cloud_timestamp"]:
+                    st.session_state.pop(key, None)
+                st.cache_data.clear()
                 st.rerun()
 
         # ── FOOTER ───────────────────────────────────────────────────────────
