@@ -2,6 +2,7 @@
 showFooter = false
 showDeployButton = false
 showRunButton = true
+showSidebarNavigation = false
 
 [logger]
 level = "error"

@@ -6,7 +6,6 @@ import os
 
 @st.cache_data(show_spinner=False)
 def get_logo_b64(path="assets/logo_proesa.png"):
-    """Carga el logo UNA sola vez y lo cachea para toda la sesión."""
     try:
         with open(path, "rb") as f:
             return base64.b64encode(f.read()).decode()
@@ -16,12 +15,6 @@ def get_logo_b64(path="assets/logo_proesa.png"):
 
 @st.cache_data(show_spinner=False)
 def _calcular_stats_inventario(df: pd.DataFrame) -> dict:
-    """
-    Calcula stats del inventario cacheados por contenido del DataFrame.
-    @st.cache_data hashea el DataFrame automáticamente — solo recalcula
-    si los datos cambiaron. NO accede a st.session_state (no permitido
-    dentro de funciones cacheadas).
-    """
     try:
         stock_num = pd.to_numeric(
             df.iloc[:, 3].astype(str).str.replace(",", "", regex=False).str.strip(),
@@ -36,117 +29,171 @@ def _calcular_stats_inventario(df: pd.DataFrame) -> dict:
         return {"total": len(df), "agotado": 0, "bajo": 0}
 
 
+NAV_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0');
+
+#MainMenu                        { display: none !important; }
+footer                           { display: none !important; }
+[data-testid="stDecoration"]     { display: none !important; }
+[data-testid="stToolbar"]        { display: none !important; }
+[data-testid="stStatusWidget"]   { display: none !important; }
+.stDeployButton                  { display: none !important; }
+header[data-testid="stHeader"] > div:first-child { display: none !important; }
+
+/* ── Botón COLAPSAR sidebar ──────────────────────────────────────────────────
+   El @import de Material Symbols arriba resuelve el texto "keyboard_d..." que
+   aparece cuando la fuente no está cargada. Los estilos de abajo le dan la
+   apariencia coherente con el tema oscuro del nav.
+────────────────────────────────────────────────────────────────────────── */
+[data-testid="stSidebarCollapseButton"] {
+    display: flex !important;
+}
+[data-testid="stSidebarCollapseButton"] button {
+    background: rgba(255,255,255,0.05) !important;
+    border: 1px solid #252540 !important;
+    border-radius: 6px !important;
+    transition: background 0.15s, border-color 0.15s !important;
+}
+[data-testid="stSidebarCollapseButton"] button span {
+    font-family: 'Material Symbols Rounded' !important;
+    font-size: 18px !important;
+    color: #9AA3BA !important;
+}
+[data-testid="stSidebarCollapseButton"] button:hover {
+    background: rgba(230,57,70,0.12) !important;
+    border-color: rgba(230,57,70,0.5) !important;
+}
+[data-testid="stSidebarCollapseButton"] button:hover span { color: #FF7A84 !important; }
+
+/* ── Botón RE-EXPANDIR sidebar ───────────────────────────────────────────────
+   Cuando el sidebar está oculto este elemento queda pegado al borde izquierdo.
+   Sin estilos es invisible contra el fondo blanco. Lo convertimos en una
+   pestaña oscura que combina con el tema del nav y es fácil de encontrar.
+────────────────────────────────────────────────────────────────────────── */
+[data-testid="collapsedControl"] {
+    display:       flex !important;
+    visibility:    visible !important;
+    opacity:       1 !important;
+    background:    #0F0F1E !important;
+    border-radius: 0 10px 10px 0 !important;
+    box-shadow:    3px 0 14px rgba(0,0,0,0.5) !important;
+    padding:       12px 7px !important;
+    transition:    background 0.15s !important;
+}
+[data-testid="collapsedControl"]:hover                { background: #1A1A35 !important; }
+[data-testid="collapsedControl"] button               { background: transparent !important; border: none !important; padding: 0 !important; }
+[data-testid="collapsedControl"] button span          { font-family: 'Material Symbols Rounded' !important; font-size: 18px !important; color: #9AA3BA !important; }
+[data-testid="collapsedControl"]:hover button span    { color: #FF7A84 !important; }
+
+[data-testid="stSidebar"] {
+    background: #0F0F1E !important;
+    border-right: 1px solid #1E1E35 !important;
+    min-width: 240px !important;
+}
+[data-testid="stSidebar"] > div:first-child  { padding: 0 !important; }
+[data-testid="stSidebarContent"]             { padding-top: 0rem !important; }
+[data-testid="stSidebarUserContent"]         { padding-top: 0.5rem !important; }
+
+[data-testid="stSidebar"] *,
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] label {
+    font-family: 'DM Sans', sans-serif !important;
+    color: #B0BAD0 !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stPageLink"] {
+    margin: 2px 12px !important;
+    border-radius: 9px !important;
+    overflow: hidden;
+}
+[data-testid="stSidebar"] [data-testid="stPageLink"] a {
+    display: flex !important;
+    align-items: center !important;
+    padding: 0.55rem 0.9rem !important;
+    border-radius: 9px !important;
+    border-left: 3px solid transparent !important;
+    font-size: 0.875rem !important;
+    font-weight: 500 !important;
+    color: #9AA3BA !important;
+    text-decoration: none !important;
+    background: transparent !important;
+    transition: all 0.15s ease !important;
+}
+[data-testid="stSidebar"] [data-testid="stPageLink"] a:hover {
+    background: rgba(255,255,255,0.06) !important;
+    color: #E0E6F0 !important;
+    border-left-color: rgba(230,57,70,0.4) !important;
+}
+[data-testid="stSidebar"] [data-testid="stPageLink"] a[aria-current="page"] {
+    background: rgba(230,57,70,0.12) !important;
+    border-left: 3px solid #E63946 !important;
+    color: #FF7A84 !important;
+    font-weight: 700 !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stMetric"] {
+    background: rgba(255,255,255,0.035) !important;
+    border: 1px solid #1E1E38 !important;
+    border-radius: 10px !important;
+    padding: 0.55rem 0.8rem !important;
+}
+[data-testid="stSidebar"] [data-testid="stMetricValue"] {
+    color: #FFFFFF !important;
+    font-family: 'DM Mono', monospace !important;
+    font-size: 1.35rem !important;
+    font-weight: 600 !important;
+}
+[data-testid="stSidebar"] [data-testid="stMetricLabel"] p {
+    color: #556080 !important;
+    font-size: 0.68rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1px !important;
+    font-weight: 700 !important;
+}
+
+[data-testid="stSidebar"] .stButton > button {
+    background: rgba(255,255,255,0.04) !important;
+    border: 1px solid #252540 !important;
+    color: #8899BB !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    border-radius: 8px !important;
+    width: 100% !important;
+    padding: 0.5rem 1rem !important;
+    transition: all 0.15s !important;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: rgba(230,57,70,0.1) !important;
+    border-color: rgba(230,57,70,0.5) !important;
+    color: #FF7A84 !important;
+}
+
+[data-testid="stSidebar"] hr {
+    border: none !important;
+    border-top: 1px solid #1A1A32 !important;
+    margin: 0.5rem 0 !important;
+}
+
+.block-container { padding-top: 1rem !important; }
+</style>
+"""
+
+
+def inject_nav_css():
+    """Inyecta el CSS global de navegación. app.py ya la llama globalmente;
+    render_nav() la repite por si se usa en aislado."""
+    st.markdown(NAV_CSS, unsafe_allow_html=True)
+
+
 def render_nav(active_page: str = "inicio", inventario_df=None):
-    """
-    Renderiza la barra lateral de navegación.
-    active_page : "inicio" | "registro" | "dashboard"
-    inventario_df : DataFrame del inventario (opcional)
-
-    NOTA: el bloque CSS debe re-inyectarse en cada render porque Streamlit
-    reconstruye la página completa en cada rerun. El flag de session_state
-    fue eliminado — era la causa de que la sidebar desapareciera.
-    """
-
-    # ── CSS: se inyecta en cada render (requerido por Streamlit) ─────────────
-    st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@500&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
-
-    [data-testid="stSidebarContent"] { padding-top: 0rem !important; }
-    [data-testid="stSidebarUserContent"] { padding-top: 0.5rem !important; }
-
-    [data-testid="stSidebarCollapseButton"] button {
-        background: transparent !important; border: none !important;
-        color: #3A4A6A !important; transition: color 0.15s !important;
-    }
-    [data-testid="stSidebarCollapseButton"] button:hover {
-        color: #8899BB !important;
-        background: rgba(255,255,255,0.06) !important;
-        border-radius: 6px !important;
-    }
-    [data-testid="stSidebarCollapseButton"] button span {
-        font-family: 'Material Symbols Rounded' !important;
-        font-size: 1.3rem !important; color: #3A4A6A !important;
-    }
-
-    [data-testid="stSidebar"] {
-        background: #0F0F1E !important;
-        border-right: 1px solid #1E1E35 !important;
-        min-width: 240px !important;
-    }
-    [data-testid="stSidebar"] > div:first-child { padding: 0 !important; }
-    [data-testid="stSidebarNav"] { display: none !important; }
-
-    [data-testid="stSidebar"] *,
-    [data-testid="stSidebar"] p,
-    [data-testid="stSidebar"] span,
-    [data-testid="stSidebar"] label {
-        font-family: 'DM Sans', sans-serif !important;
-        color: #B0BAD0 !important;
-    }
-
-    [data-testid="stSidebar"] [data-testid="stPageLink"] {
-        margin: 2px 12px !important; border-radius: 9px !important; overflow: hidden;
-    }
-    [data-testid="stSidebar"] [data-testid="stPageLink"] a {
-        display: flex !important; align-items: center !important;
-        padding: 0.55rem 0.9rem !important; border-radius: 9px !important;
-        border-left: 3px solid transparent !important;
-        font-size: 0.875rem !important; font-weight: 500 !important;
-        color: #9AA3BA !important; text-decoration: none !important;
-        background: transparent !important; transition: all 0.15s ease !important;
-    }
-    [data-testid="stSidebar"] [data-testid="stPageLink"] a:hover {
-        background: rgba(255,255,255,0.06) !important;
-        color: #E0E6F0 !important;
-        border-left-color: rgba(230,57,70,0.4) !important;
-    }
-    [data-testid="stSidebar"] [data-testid="stPageLink"] a[aria-current="page"] {
-        background: rgba(230,57,70,0.12) !important;
-        border-left: 3px solid #E63946 !important;
-        color: #FF7A84 !important; font-weight: 700 !important;
-    }
-
-    [data-testid="stSidebar"] [data-testid="stMetric"] {
-        background: rgba(255,255,255,0.035) !important;
-        border: 1px solid #1E1E38 !important;
-        border-radius: 10px !important; padding: 0.55rem 0.8rem !important;
-    }
-    [data-testid="stSidebar"] [data-testid="stMetricValue"] {
-        color: #FFFFFF !important;
-        font-family: 'DM Mono', monospace !important;
-        font-size: 1.35rem !important; font-weight: 600 !important;
-    }
-    [data-testid="stSidebar"] [data-testid="stMetricLabel"] p {
-        color: #556080 !important; font-size: 0.68rem !important;
-        text-transform: uppercase !important; letter-spacing: 1px !important;
-        font-weight: 700 !important;
-    }
-
-    [data-testid="stSidebar"] .stButton > button {
-        background: rgba(255,255,255,0.04) !important;
-        border: 1px solid #252540 !important; color: #8899BB !important;
-        font-family: 'DM Sans', sans-serif !important;
-        font-size: 0.82rem !important; font-weight: 500 !important;
-        border-radius: 8px !important; width: 100% !important;
-        padding: 0.5rem 1rem !important; transition: all 0.15s !important;
-    }
-    [data-testid="stSidebar"] .stButton > button:hover {
-        background: rgba(230,57,70,0.1) !important;
-        border-color: rgba(230,57,70,0.5) !important; color: #FF7A84 !important;
-    }
-
-    [data-testid="stSidebar"] hr {
-        border: none !important; border-top: 1px solid #1A1A32 !important;
-        margin: 0.5rem 0 !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    inject_nav_css()
 
     with st.sidebar:
 
-        # ── LOGO (cacheado en disco, no toca disco en reruns) ────────────────
         logo_b64 = get_logo_b64()
         if logo_b64:
             st.markdown(f"""
@@ -172,7 +219,6 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
             </div>
             """, unsafe_allow_html=True)
 
-        # ── NAVEGACIÓN ───────────────────────────────────────────────────────
         st.markdown("""
         <div style="font-size:0.6rem;font-weight:800;text-transform:uppercase;
                     letter-spacing:2px;color:#2A3560;padding:0.9rem 1.1rem 0.35rem;">
@@ -180,13 +226,14 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
         </div>
         """, unsafe_allow_html=True)
 
-        st.page_link("app.py",             label="📦  Panel de Control")
+        # ── CORRECCIÓN: app.py ya no es una página navegable con st.navigation().
+        # El panel vive ahora en pages/inicio.py.
+        st.page_link("pages/inicio.py",    label="📦  Panel de Control")
         st.page_link("pages/registro.py",  label="📝  Registro Manual")
         st.page_link("pages/dashboard.py", label="📊  Dashboard Consolidado")
 
         st.markdown("<hr style='margin:0.75rem 0'>", unsafe_allow_html=True)
 
-        # ── STATS DE INVENTARIO (cacheados por contenido del df) ─────────────
         df_stats = inventario_df if inventario_df is not None \
                    else st.session_state.get("df_inventario_maestro")
 
@@ -218,7 +265,6 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
 
             st.markdown("<hr style='margin:0.75rem 0'>", unsafe_allow_html=True)
 
-        # ── GESTIÓN ──────────────────────────────────────────────────────────
         st.markdown("""
         <div style="font-size:0.6rem;font-weight:800;text-transform:uppercase;
                     letter-spacing:2px;color:#2A3560;padding:0.5rem 1.1rem 0.35rem;">
@@ -237,7 +283,6 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
                 st.cache_data.clear()
                 st.rerun()
 
-        # ── FOOTER ───────────────────────────────────────────────────────────
         st.markdown("""
         <div style="margin-top:2.5rem;padding:1rem 1.1rem 1rem;
                     border-top:1px solid #141425;text-align:center;">
