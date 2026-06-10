@@ -401,9 +401,9 @@ else:
                     df_inv[COL_NOMBRE].astype(str).str.contains(expr, case=False, na=False)
                     | df_inv[COL_CODIGO].astype(str).str.strip().str.contains(expr, case=False, na=False)
                 )
-                df_vista = df_inv[mascara].head(8)
+                df_vista = df_inv[mascara]
             else:
-                df_vista = df_inv.head(6)
+                df_vista = df_inv
 
             if df_vista.empty:
                 st.info("🔍 Ningún artículo coincide con los criterios introducidos.")
