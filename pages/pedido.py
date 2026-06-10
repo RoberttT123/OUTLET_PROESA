@@ -446,11 +446,11 @@ else:
                                     cant = st.number_input(
                                         "Cant", min_value=1, max_value=max(stock, 1),
                                         value=1, step=1,
-                                        key=f"qty_{codigo}",
+                                        key=f"qty_{idx}_{codigo}",
                                         label_visibility="collapsed",
                                     )
                                 with c_btn:
-                                    if st.button("➕ Solicitar", key=f"add_{codigo}", use_container_width=True):
+                                    if st.button("➕ Solicitar", key=f"add_{idx}_{codigo}", use_container_width=True):
                                         item_existente = next(
                                             (i for i in st.session_state.carrito if i["codigo_producto"] == codigo),
                                             None,
@@ -478,7 +478,7 @@ else:
                                         st.session_state.tab_idx = 0
                                         st.rerun(scope="fragment")
                             else:
-                                st.button("🚫 No Disponible", key=f"dis_{codigo}",
+                                st.button("🚫 No Disponible", key=f"dis_{idx}_{codigo}",
                                           disabled=True, use_container_width=True)
                             st.markdown("<br>", unsafe_allow_html=True)
 
