@@ -9,32 +9,10 @@ Desarrollado para: PROYECTO_OUTLET
 import streamlit as st
 import pandas as pd
 import base64
-import hashlib
 from datetime import datetime, date, timedelta
 
 # ==============================================================================
-# 1. CLOUDINARY
-# ==============================================================================
-CLOUDINARY_CLOUD_NAME       = "df4qxsdtz"
-NOMBRES_IMAGENES_CLOUDINARY = [str(i) for i in range(1, 10)]
-CLOUDINARY_VERSION          = "v1779347596"
-
-
-def obtener_url_imagen_aleatoria_consistente(sku_codigo: str) -> str:
-    if not sku_codigo:
-        return "https://via.placeholder.com/300x300?text=Sin+Imagen"
-    hash_int = int(hashlib.md5(str(sku_codigo).encode("utf-8")).hexdigest(), 16)
-    indice   = hash_int % len(NOMBRES_IMAGENES_CLOUDINARY)
-    nombre   = NOMBRES_IMAGENES_CLOUDINARY[indice]
-    return (
-        f"https://res.cloudinary.com/"
-        f"{CLOUDINARY_CLOUD_NAME}/image/upload/"
-        f"{CLOUDINARY_VERSION}/{nombre}.jpg"
-    )
-
-
-# ==============================================================================
-# 2. IMPORTS
+# 1. IMPORTS
 # ==============================================================================
 try:
     from config import (
@@ -61,7 +39,7 @@ except ImportError as e:
     st.stop()
 
 # ==============================================================================
-# 3. PAGE CONFIG Y CSS
+# 2. PAGE CONFIG Y CSS
 # ==============================================================================
 try:
     st.set_page_config(
@@ -158,7 +136,7 @@ div[data-testid="stRadio"] div[data-baseweb="radio"] > div:first-child { display
 
 
 # ==============================================================================
-# 4. LOGO
+# 3. LOGO
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def get_logo_b64(path="assets/logo_proesa.png"):
@@ -170,7 +148,7 @@ def get_logo_b64(path="assets/logo_proesa.png"):
 
 
 # ==============================================================================
-# 5. SESSION STATE
+# 4. SESSION STATE
 # ==============================================================================
 defaults = {
     "logged_in":  False,
@@ -189,7 +167,7 @@ for k, v in defaults.items():
 
 
 # ==============================================================================
-# 6. PARSEO ROBUSTO
+# 5. PARSEO ROBUSTO
 # ==============================================================================
 def _parse_stock(v) -> int:
     try:
@@ -226,7 +204,7 @@ def _etiqueta_relativa(d: date) -> str:
 
 
 # ==============================================================================
-# 7. INVENTARIO E ÍNDICE
+# 6. INVENTARIO E ÍNDICE
 # ==============================================================================
 @st.cache_data(ttl=600, show_spinner=False)
 def cargar_inventario():
@@ -443,7 +421,6 @@ else:
                             precio = _parse_precio(reg[COL_PRECIO])
                             codigo = str(reg[COL_CODIGO]).strip()
                             nombre = str(reg[COL_NOMBRE]).strip()
-                            imagen = obtener_url_imagen_aleatoria_consistente(codigo)
                         except Exception as e:
                             st.caption(f"⚠️ Error fila {idx}: {e}")
                             continue
@@ -461,7 +438,7 @@ else:
                         with cols[j]:
                             render_tarjeta_producto(
                                 codigo=codigo, nombre=nombre,
-                                precio=precio, stock_badge=badge, url_foto=imagen,
+                                precio=precio, stock_badge=badge,
                             )
                             if not bloqueado:
                                 c_num, c_btn = st.columns([1, 1.3])
@@ -520,7 +497,6 @@ else:
                 for pos, item in enumerate(st.session_state.carrito):
                     datos = indice_productos.get(item["producto"])
                     s_max = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
-                    foto  = obtener_url_imagen_aleatoria_consistente(item["codigo_producto"])
 
                     cantidad_guardada = int(item["cantidad"])
                     if cantidad_guardada > s_max:
@@ -534,7 +510,6 @@ else:
                         html_item = render_estructura_item_carrito(
                             nombre=item["producto"],
                             precio_total=item["subtotal"],
-                            url_foto=foto,
                         )
                         st.markdown(f'<div class="item-carrito">{html_item}</div>', unsafe_allow_html=True)
                     with c_cant:

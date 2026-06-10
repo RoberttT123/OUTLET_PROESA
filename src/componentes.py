@@ -119,25 +119,6 @@ def cargar_estilos_css():
         width: 100%;
     }
 
-    .item-carrito-img {
-        width: 65px;
-        height: 65px;
-        background: #FAFAFA;
-        border-radius: 8px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 0.2rem;
-        flex-shrink: 0;
-        border: 1px solid #EBEBEB;
-    }
-    
-    .item-carrito-img img {
-        max-width: 100%;
-        max-height: 100%;
-        object-fit: contain;
-    }
-
     .item-carrito-detalles {
         flex-grow: 1;
         display: flex;
@@ -203,29 +184,11 @@ def cargar_estilos_css():
         transform: translateY(-2px);
         box-shadow: 0 6px 15px rgba(0,0,0,0.06);
     }
-    
-    .card-img-container {
-        text-align: center;
-        padding: 0.5rem;
-        background: #FAFAFA;
-        border-radius: 8px;
-        margin-bottom: 0.8rem;
-        height: 120px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    
-    .card-img-container img { 
-        height: 110px; 
-        max-width: 100%; 
-        object-fit: contain; 
-    }
 
     /* ── BADGES DE ESTADO DE INVENTARIO (STOCK) ── */
-    .stock-ok { background: #D1FAE5; color: #065F46; border-radius: 20px; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; display: inline-block; }
+    .stock-ok   { background: #D1FAE5; color: #065F46; border-radius: 20px; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; display: inline-block; }
     .stock-warn { background: #FEF9C3; color: #854D0E; border-radius: 20px; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; display: inline-block; }
-    .stock-out { background: #FEE2E2; color: #991B1B; border-radius: 20px; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; display: inline-block; }
+    .stock-out  { background: #FEE2E2; color: #991B1B; border-radius: 20px; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; display: inline-block; }
 
     /* ── REMOCIÓN DE ELEMENTOS NATIVOS DE STREAMLIT (UI CLEANUP) ── */
     #MainMenu, header, footer { visibility: hidden; }
@@ -245,21 +208,13 @@ def cargar_estilos_css():
     """, unsafe_allow_html=True)
 
 
-def render_tarjeta_producto(codigo: str, nombre: str, precio: float, stock_badge: str, url_foto: str):
+def render_tarjeta_producto(codigo: str, nombre: str, precio: float, stock_badge: str):
     """
     Construye y renderiza el bloque HTML correspondiente a la tarjeta del catálogo.
     Usa st.markdown de forma directa para asegurar su interpretación en el DOM.
     """
-    if not url_foto or not isinstance(url_foto, str) or url_foto.strip() == "":
-        url_final = "https://images.unsplash.com/photo-1544476915-ed1370594142?w=150"
-    else:
-        url_final = url_foto
-
     html_tarjeta = f"""
     <div class="card-producto">
-        <div class="card-img-container">
-            <img src="{url_final}" alt="{nombre}">
-        </div>
         <div style="min-height: 50px;">
             <span style="font-size:0.75rem; color:#888; font-family:'DM Mono', monospace; display:block; margin-bottom:1px;">
                 SKU: {codigo}
@@ -283,22 +238,14 @@ def render_tarjeta_producto(codigo: str, nombre: str, precio: float, stock_badge
     st.markdown(html_tarjeta, unsafe_allow_html=True)
 
 
-def render_estructura_item_carrito(nombre: str, precio_total: float, url_foto: str):
+def render_estructura_item_carrito(nombre: str, precio_total: float):
     """
-    Construye el segmento de la estructura interna del item del carrito 
-    (Imagen, Título y Precio a la derecha) alineado con flexbox.
+    Construye el segmento de la estructura interna del item del carrito
+    (Título y Precio a la derecha) alineado con flexbox.
     Retorna la cadena HTML lista para ser renderizada en conjunto con los inputs de control.
     """
-    if not url_foto or not isinstance(url_foto, str) or url_foto.strip() == "":
-        url_final = "https://images.unsplash.com/photo-1544476915-ed1370594142?w=150"
-    else:
-        url_final = url_foto
-
     html_item = f"""
     <div class="item-carrito-flex">
-        <div class="item-carrito-img">
-            <img src="{url_final}" alt="{nombre}">
-        </div>
         <div class="item-carrito-detalles">
             <h4 class="item-carrito-titulo">{nombre}</h4>
         </div>
