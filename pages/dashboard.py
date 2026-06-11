@@ -46,22 +46,18 @@ st.markdown("""
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PARSEO SEGURO DE PRECIOS
-# [CORREGIDO] Reemplaza el heurístico "si >= 1000 → /100" que distorsionaba
-# precios legítimos (p.ej. Bs 1.500 pasaba a Bs 15,00).
-# Maneja: boliviano (8,77), latino (1.500,00) e internacional (1,234.56).
 # ══════════════════════════════════════════════════════════════════════════════
 def _parsear_precio_str(val) -> float:
     try:
         s = str(val).upper().replace("BS", "").replace(" ", "").strip()
         if not s or s in ("NAN", "NONE", ""):
             return 0.0
-        # Formato latino: 1.500,00 → punto=miles, coma=decimal
         if re.match(r'^\d{1,3}(\.\d{3})+(,\d+)?$', s):
             s = s.replace(".", "").replace(",", ".")
         elif "," in s and "." not in s:
-            s = s.replace(",", ".")   # 8,77 → 8.77
+            s = s.replace(",", ".")
         else:
-            s = s.replace(",", "")    # quitar comas de miles formato US
+            s = s.replace(",", "")
         return float(s)
     except Exception:
         return 0.0
@@ -107,9 +103,7 @@ def sanitizar_inventario_dashboard(df):
     nuevos_stocks  = []
     nuevos_precios = []
     for _, row in df.iterrows():
-        # Precio — parseo seguro sin heurísticas de división
         nuevos_precios.append(_parsear_precio_str(str(row[COL_PRECIO_INV])))
-        # Stock — protege separadores de miles (ej: "1.250" = 1250 unidades)
         try:
             s_str = str(row[COL_STOCK_INV]).strip().replace(",", "")
             if "." in s_str and len(s_str.split(".")[1]) == 3:
@@ -125,7 +119,6 @@ def sanitizar_inventario_dashboard(df):
 
 df_inv = sanitizar_inventario_dashboard(df_inv)
 
-# Índice rápido código → precio limpio para cruzar con el historial de pedidos
 diccionario_precios_maestros = {
     str(row[COL_CODIGO_INV]).strip(): float(row[COL_PRECIO_INV])
     for _, row in df_inv.iterrows() if pd.notna(row[COL_CODIGO_INV])
@@ -167,10 +160,6 @@ df_pedidos["Cantidad"] = pd.to_numeric(
 
 
 def normalizar_precio_pedido_dashboard(row):
-    """
-    Usa el precio del inventario maestro (ya sanitizado) como fuente de verdad.
-    Para ítems huérfanos aplica parseo seguro sin divisiones heurísticas.
-    """
     codigo_p = str(row.get(COL_CODIGO_PEDIDO, "")).strip()
     if codigo_p in diccionario_precios_maestros:
         return diccionario_precios_maestros[codigo_p]
@@ -178,7 +167,7 @@ def normalizar_precio_pedido_dashboard(row):
 
 
 df_pedidos[COL_PRECIO_PEDIDO] = df_pedidos.apply(normalizar_precio_pedido_dashboard, axis=1)
-df_pedidos["Subtotal"]        = df_pedidos[COL_PRECIO_PEDIDO] * df_pedidos["Cantidad"]
+df_pedidos["Subtotal"]        = (df_pedidos[COL_PRECIO_PEDIDO] * df_pedidos["Cantidad"]).round(2)
 df_pedidos[COL_FECHA_PEDIDO]  = pd.to_datetime(df_pedidos[COL_FECHA_PEDIDO], errors="coerce", dayfirst=True)
 
 
@@ -281,7 +270,6 @@ st.markdown("### 📥 Reportes y Sincronización")
 e1, e2, e3 = st.columns([1, 1, 2])
 
 with e1:
-    # Pop de session_state: solo afecta a este usuario, no a caché compartida
     if st.button("🔄 Sincronizar Sheets Ahora", use_container_width=True):
         for k in ["df_inv_dashboard", "df_pedidos_dashboard", "dashboard_timestamp"]:
             st.session_state.pop(k, None)
@@ -289,7 +277,16 @@ with e1:
 
 with e2:
     try:
-        csv = df_filtrado.to_csv(index=False, encoding="utf-8-sig")
+        # Preparar copia limpia para exportar: valores redondeados y fechas
+        # formateadas como texto para que el CSV coincida con lo que
+        # muestra la app (evita precisión flotante tipo 26.309999999...)
+        csv_df = df_filtrado.copy()
+        csv_df["Subtotal"] = csv_df["Subtotal"].round(2)
+        if COL_PRECIO_PEDIDO in csv_df.columns:
+            csv_df[COL_PRECIO_PEDIDO] = csv_df[COL_PRECIO_PEDIDO].round(2)
+        if COL_FECHA_PEDIDO in csv_df.columns:
+            csv_df[COL_FECHA_PEDIDO] = csv_df[COL_FECHA_PEDIDO].dt.strftime("%d/%m/%Y %H:%M")
+        csv = csv_df.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
             label="📥 Exportar CSV",
             data=csv,

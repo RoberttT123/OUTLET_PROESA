@@ -42,11 +42,6 @@ footer                           { display: none !important; }
 .stDeployButton                  { display: none !important; }
 header[data-testid="stHeader"] > div:first-child { display: none !important; }
 
-/* ── Botón COLAPSAR sidebar ──────────────────────────────────────────────────
-   El @import de Material Symbols arriba resuelve el texto "keyboard_d..." que
-   aparece cuando la fuente no está cargada. Los estilos de abajo le dan la
-   apariencia coherente con el tema oscuro del nav.
-────────────────────────────────────────────────────────────────────────── */
 [data-testid="stSidebarCollapseButton"] {
     display: flex !important;
 }
@@ -67,11 +62,6 @@ header[data-testid="stHeader"] > div:first-child { display: none !important; }
 }
 [data-testid="stSidebarCollapseButton"] button:hover span { color: #FF7A84 !important; }
 
-/* ── Botón RE-EXPANDIR sidebar ───────────────────────────────────────────────
-   Cuando el sidebar está oculto este elemento queda pegado al borde izquierdo.
-   Sin estilos es invisible contra el fondo blanco. Lo convertimos en una
-   pestaña oscura que combina con el tema del nav y es fácil de encontrar.
-────────────────────────────────────────────────────────────────────────── */
 [data-testid="collapsedControl"] {
     display:       flex !important;
     visibility:    visible !important;
@@ -184,8 +174,6 @@ header[data-testid="stHeader"] > div:first-child { display: none !important; }
 
 
 def inject_nav_css():
-    """Inyecta el CSS global de navegación. app.py ya la llama globalmente;
-    render_nav() la repite por si se usa en aislado."""
     st.markdown(NAV_CSS, unsafe_allow_html=True)
 
 
@@ -226,10 +214,7 @@ def render_nav(active_page: str = "inicio", inventario_df=None):
         </div>
         """, unsafe_allow_html=True)
 
-        # ── CORRECCIÓN: app.py ya no es una página navegable con st.navigation().
-        # El panel vive ahora en pages/inicio.py.
         st.page_link("pages/inicio.py",    label="📦  Panel de Control")
-        st.page_link("pages/registro.py",  label="📝  Registro Manual")
         st.page_link("pages/dashboard.py", label="📊  Dashboard Consolidado")
 
         st.markdown("<hr style='margin:0.75rem 0'>", unsafe_allow_html=True)

@@ -14,6 +14,7 @@ import pandas as pd
 import os
 import base64
 import re
+import json
 from datetime import datetime
 
 # ── Conectores de nube ────────────────────────────────────────────────────────
@@ -33,8 +34,28 @@ except ImportError as e:
     st.stop()
 
 # ── Constantes ────────────────────────────────────────────────────────────────
-PATH_INV_SISTEMA   = "data/inventario_maestro.xlsx"
-CACHE_TTL_SEGUNDOS = 120   # Datos dinámicos de la nube se refrescan cada 2 min
+PATH_INV_SISTEMA    = "data/inventario_maestro.xlsx"
+CACHE_TTL_SEGUNDOS  = 120
+PATH_OUTLET_ESTADO  = "data/outlet_estado.json"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONTROL DE ACCESO AL OUTLET
+# ══════════════════════════════════════════════════════════════════════════════
+def _leer_outlet_activo() -> bool:
+    try:
+        with open(PATH_OUTLET_ESTADO, "r", encoding="utf-8") as f:
+            return json.load(f).get("activo", True)
+    except Exception:
+        return True   # Si no existe el archivo, el outlet está activo por defecto
+
+def _guardar_outlet_activo(activo: bool):
+    os.makedirs("data", exist_ok=True)
+    with open(PATH_OUTLET_ESTADO, "w", encoding="utf-8") as f:
+        json.dump({
+            "activo":      activo,
+            "actualizado": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+        }, f, ensure_ascii=False)
 
 # ── Estilos de página ─────────────────────────────────────────────────────────
 st.markdown("""
@@ -176,7 +197,8 @@ def obtener_inventario_sheets_protegido(url, hoja):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ESCRITURA EN LOTE HACIA LA NUBE
-# Usa update() atómico en lugar de clear()+write() para evitar ventana vacía.
+# Primero redimensiona la hoja al tamaño exacto del nuevo catálogo para
+# eliminar filas sobrantes, luego sobreescribe con los datos nuevos.
 # ══════════════════════════════════════════════════════════════════════════════
 def escribir_inventario_sheets(url_sheet: str, hoja: str, df_nuevo: pd.DataFrame) -> bool:
     try:
@@ -200,9 +222,18 @@ def escribir_inventario_sheets(url_sheet: str, hoja: str, df_nuevo: pd.DataFrame
 
         matriz_completa = [cabeceras] + filas
 
-        # update() sobreescribe sin vaciar la hoja primero (atómico).
-        # Esto evita que un empleado encuentre el inventario vacío durante
-        # la sincronización.
+        # 1. Redimensionar la hoja al tamaño exacto del nuevo catálogo.
+        #    Si el nuevo archivo tiene menos filas que el anterior, las filas
+        #    sobrantes se eliminan aquí antes de escribir nada.
+        _con_reintento(
+            worksheet.resize,
+            rows=len(matriz_completa),
+            cols=len(cabeceras),
+        )
+
+        # 2. Sobreescribir con los datos nuevos desde A1.
+        #    Como la hoja ya tiene el tamaño exacto, no quedan restos del
+        #    catálogo anterior.
         _con_reintento(
             worksheet.update,
             values=matriz_completa,
@@ -310,6 +341,53 @@ if archivo:
 if df_inv is None:
     st.warning("⚠️ No se ha detectado el Inventario Maestro. Por favor sube un archivo Excel para iniciar.")
     st.stop()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECCIÓN: CONTROL DE ACCESO AL OUTLET
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-title">🔒 Control de Acceso al Outlet</div>', unsafe_allow_html=True)
+
+outlet_activo = _leer_outlet_activo()
+col_estado, col_boton = st.columns([3, 1])
+
+with col_estado:
+    if outlet_activo:
+        st.markdown("""
+        <div style="background:#D1FAE5;border-radius:10px;padding:0.85rem 1.2rem;
+                    border-left:4px solid #2DC653;">
+            <strong style="color:#065F46;">✅ Outlet ACTIVO</strong>
+            <p style="color:#065F46;margin:0.25rem 0 0;font-size:0.85rem;">
+                Los empleados pueden ingresar y realizar pedidos normalmente.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background:#FEE2E2;border-radius:10px;padding:0.85rem 1.2rem;
+                    border-left:4px solid #E63946;">
+            <strong style="color:#991B1B;">🔒 Outlet INACTIVO</strong>
+            <p style="color:#991B1B;margin:0.25rem 0 0;font-size:0.85rem;">
+                El acceso a pedidos está bloqueado. Los empleados verán una pantalla de cierre.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+with col_boton:
+    st.markdown("<div style='margin-top:6px'>", unsafe_allow_html=True)
+    if outlet_activo:
+        if st.button("🔒 Desactivar", use_container_width=True, type="primary"):
+            _guardar_outlet_activo(False)
+            st.toast("🔒 Outlet desactivado. Los empleados ya no pueden acceder.", icon="🔒")
+            st.rerun()
+    else:
+        if st.button("✅ Activar", use_container_width=True, type="primary"):
+            _guardar_outlet_activo(True)
+            st.toast("✅ Outlet activado. Los empleados ya pueden realizar pedidos.", icon="✅")
+            st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

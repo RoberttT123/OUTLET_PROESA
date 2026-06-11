@@ -9,6 +9,7 @@ Desarrollado para: PROYECTO_OUTLET
 import streamlit as st
 import pandas as pd
 import base64
+import json
 from datetime import datetime, date, timedelta
 
 # ==============================================================================
@@ -233,6 +234,47 @@ COL_STOCK  = "Stock"           if "Stock"           in df_inv.columns else df_in
 COL_PRECIO = "Precio Unitario" if "Precio Unitario" in df_inv.columns else df_inv.columns[4]
 COL_LINEA  = "Línea"           if "Línea"           in df_inv.columns else df_inv.columns[0]
 COL_EMP    = "Empresa"         if "Empresa"         in df_inv.columns else df_inv.columns[5]
+
+
+# ==============================================================================
+# VERIFICACIÓN: OUTLET ACTIVO
+# Si el administrador desactivó el outlet desde inicio.py, se bloquea
+# el acceso completo antes de mostrar cualquier pantalla a los empleados.
+# ==============================================================================
+def _outlet_activo() -> bool:
+    try:
+        with open("data/outlet_estado.json", "r", encoding="utf-8") as f:
+            return json.load(f).get("activo", True)
+    except Exception:
+        return True   # Sin archivo → activo por defecto
+
+if not _outlet_activo():
+    logo = get_logo_b64()
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #1A1A2E 0%, #0F3460 100%);
+        border-radius: 20px;
+        padding: 3rem 2.5rem;
+        margin: 2rem auto;
+        max-width: 520px;
+        text-align: center;
+        color: white;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    ">
+        {f'<img src="data:image/png;base64,{logo}" style="height:120px;object-fit:contain;margin-bottom:1.5rem;">' if logo else '<div style="font-size:3rem;margin-bottom:1rem;">📦</div>'}
+        <div style="font-size:2.5rem;margin-bottom:0.75rem;">🔒</div>
+        <h2 style="margin:0 0 0.75rem;font-size:1.6rem;font-weight:700;">
+            Outlet Cerrado
+        </h2>
+        <p style="opacity:0.85;font-size:1rem;margin:0 0 0.5rem;">
+            El período de pedidos ha finalizado por el momento.
+        </p>
+        <p style="opacity:0.6;font-size:0.85rem;margin:0;">
+            Consulta con tu supervisor para más información.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
 
 
 # ==============================================================================
@@ -560,7 +602,24 @@ else:
                 if st.button("REALIZAR PEDIDO", type="primary",
                              use_container_width=True, key="btn_enviar"):
                     if lista_envio:
-                        ejecutar_envio_transaccional(lista_envio)
+                        # Validación previa: bloquear si alguna cantidad
+                        # supera el stock disponible antes de llamar la transacción.
+                        # Esto evita que el pedido se envíe mientras el
+                        # number_input muestra un error de rango.
+                        excesos = [
+                            i for i in lista_envio
+                            if i["cantidad"] > i["stock_actual"]
+                        ]
+                        if excesos:
+                            st.session_state["lista_productos_colision"] = "".join(
+                                f"<li><b>{i['producto']}</b>: pediste "
+                                f"<b>{i['cantidad']} ud.</b> pero solo hay "
+                                f"<b>{i['stock_actual']} ud.</b> disponibles.</li>"
+                                for i in excesos
+                            )
+                            st.rerun(scope="fragment")
+                        else:
+                            ejecutar_envio_transaccional(lista_envio)
 
                 if "lista_productos_colision" in st.session_state:
                     st.markdown(f"""
