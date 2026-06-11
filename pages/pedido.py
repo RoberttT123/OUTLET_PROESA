@@ -439,9 +439,10 @@ else:
 
             if filtro:
                 expr    = str(filtro).strip()
+# DESPUÉS ✅
                 mascara = (
-                    df_inv[COL_NOMBRE].astype(str).str.contains(expr, case=False, na=False)
-                    | df_inv[COL_CODIGO].astype(str).str.strip().str.contains(expr, case=False, na=False)
+                    df_inv[COL_NOMBRE].astype(str).str.contains(expr, case=False, na=False, regex=False)
+                    | df_inv[COL_CODIGO].astype(str).str.strip().str.contains(expr, case=False, na=False, regex=False)
                 )
                 df_vista = df_inv[mascara]
             else:
