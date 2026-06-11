@@ -375,7 +375,7 @@ else:
                     for p in transaccion["sin_stock"]:
                         detalles_html += (
                             f"<li><b>{p['producto']}</b>: Solicitaste {p['pedido']} ud., "
-                            f"pero el stock real es <b>{p['disponible']} ud.</b></li>"
+                            f"pero el stock actual bajo a <b>{p['disponible']} ud.</b></li>"
                         )
                     st.session_state["lista_productos_colision"] = detalles_html
                     st.toast("⚠️ No se pudo enviar el pedido: stock agotado.", icon="❌")
@@ -425,7 +425,7 @@ else:
         )
         st.session_state.tab_idx = opciones.index(tab_sel)
 
-        # ══════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════
         # TAB 0 — CATÁLOGO
         # ══════════════════════════════════════════════════════════════════════
         if st.session_state.tab_idx == 0:
@@ -485,40 +485,47 @@ else:
                             if not bloqueado:
                                 c_num, c_btn = st.columns([1, 1.3])
                                 with c_num:
+                                    # Sin max_value para validar en el backend
                                     cant = st.number_input(
-                                        "Cant", min_value=1, max_value=max(stock, 1),
-                                        value=1, step=1,
+                                        "Cant", min_value=1, value=1, step=1,
                                         key=f"qty_{idx}_{codigo}",
                                         label_visibility="collapsed",
                                     )
                                 with c_btn:
                                     if st.button("➕ Solicitar", key=f"add_{idx}_{codigo}", use_container_width=True):
-                                        item_existente = next(
-                                            (i for i in st.session_state.carrito if i["codigo_producto"] == codigo),
-                                            None,
-                                        )
-                                        if item_existente:
-                                            nueva_cant = min(item_existente["cantidad"] + int(cant), stock)
-                                            if nueva_cant != item_existente["cantidad"] + int(cant):
-                                                st.session_state["toast_msg"]  = f"⚠️ Ajustado al stock máximo ({stock} ud.)"
-                                                st.session_state["toast_icon"] = "💡"
-                                            else:
-                                                st.session_state["toast_msg"]  = f"🔄 Cantidad de '{nombre}' actualizada en el carrito"
-                                                st.session_state["toast_icon"] = "🛒"
-                                            item_existente["cantidad"] = nueva_cant
-                                            item_existente["subtotal"] = nueva_cant * precio
+                                        # Validación de stock en Python
+                                        if int(cant) > stock:
+                                            st.session_state["toast_msg"]  = f"⚠️ Solo hay {stock} unidades disponibles"
+                                            st.session_state["toast_icon"] = "🚫"
+                                            st.rerun(scope="fragment")
                                         else:
-                                            st.session_state.carrito.append({
-                                                "codigo_producto": codigo,
-                                                "producto":        nombre,
-                                                "cantidad":        int(cant),
-                                                "precio_unitario": precio,
-                                                "subtotal":        precio * int(cant),
-                                            })
-                                            st.session_state["toast_msg"]  = f"¡'{nombre}' agregado al carrito!"
-                                            st.session_state["toast_icon"] = "🛒"
-                                        st.session_state.tab_idx = 0
-                                        st.rerun(scope="fragment")
+                                            item_existente = next(
+                                                (i for i in st.session_state.carrito if i["codigo_producto"] == codigo),
+                                                None,
+                                            )
+                                            if item_existente:
+                                                nueva_cant = item_existente["cantidad"] + int(cant)
+                                                if nueva_cant > stock:
+                                                    st.session_state["toast_msg"]  = f"⚠️ Alcanzaste el límite de stock ({stock} ud.)"
+                                                    st.session_state["toast_icon"] = "🚫"
+                                                else:
+                                                    st.session_state["toast_msg"]  = f"🔄 Cantidad de '{nombre}' actualizada en el carrito"
+                                                    st.session_state["toast_icon"] = "🛒"
+                                                    item_existente["cantidad"] = nueva_cant
+                                                    item_existente["subtotal"] = nueva_cant * precio
+                                            else:
+                                                st.session_state.carrito.append({
+                                                    "codigo_producto": codigo,
+                                                    "producto":        nombre,
+                                                    "cantidad":        int(cant),
+                                                    "precio_unitario": precio,
+                                                    "subtotal":        precio * int(cant),
+                                                })
+                                                st.session_state["toast_msg"]  = f"¡'{nombre}' agregado al carrito!"
+                                                st.session_state["toast_icon"] = "🛒"
+                                            
+                                            st.session_state.tab_idx = 0
+                                            st.rerun(scope="fragment")
                             else:
                                 st.button("🚫 No Disponible", key=f"dis_{idx}_{codigo}",
                                           disabled=True, use_container_width=True)
@@ -541,11 +548,9 @@ else:
                     s_max = _parse_stock(datos[COL_STOCK]) if datos is not None else 999
 
                     cantidad_guardada = int(item["cantidad"])
+                    
                     if cantidad_guardada > s_max:
-                        cantidad_guardada = max(1, s_max)
-                        st.session_state.carrito[pos]["cantidad"] = cantidad_guardada
-                        st.session_state.carrito[pos]["subtotal"] = cantidad_guardada * item["precio_unitario"]
-                        st.warning(f"⚠️ Stock de **{item['producto']}** reajustado al máximo disponible ({s_max} ud.).")
+                        st.warning(f"⚠️ Atención: Has solicitado **{cantidad_guardada} ud.** de **{item['producto']}**, pero el stock actual bajó a **{s_max} ud.** Ajusta la cantidad.")
 
                     c_info, c_cant, c_del = st.columns([2.5, 1.2, 0.4])
                     with c_info:
@@ -556,10 +561,12 @@ else:
                         st.markdown(f'<div class="item-carrito">{html_item}</div>', unsafe_allow_html=True)
                     with c_cant:
                         st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
+                        
+                        # Usamos el código del producto para la key
                         nueva_cant = st.number_input(
-                            "Cant", min_value=1, max_value=max(s_max, 1),
+                            "Cant", min_value=1,
                             value=cantidad_guardada, step=1,
-                            key=f"cant_{pos}", label_visibility="collapsed",
+                            key=f"cant_cart_{item['codigo_producto']}", label_visibility="collapsed",
                         )
                         if int(nueva_cant) != int(item["cantidad"]):
                             st.session_state.carrito[pos]["cantidad"] = int(nueva_cant)
@@ -568,7 +575,7 @@ else:
                             st.rerun(scope="fragment")
                     with c_del:
                         st.markdown("<div style='margin-top:15px'></div>", unsafe_allow_html=True)
-                        if st.button("🗑️", key=f"del_{pos}", help="Eliminar ítem"):
+                        if st.button("🗑️", key=f"del_{item['codigo_producto']}", help="Eliminar ítem"):
                             st.session_state.carrito.pop(pos)
                             st.session_state.tab_idx = 1
                             st.rerun(scope="fragment")
@@ -601,33 +608,64 @@ else:
 
                 if st.button("REALIZAR PEDIDO", type="primary",
                              use_container_width=True, key="btn_enviar"):
+                    
+                    st.session_state.pop("lista_productos_colision", None)
+                    
                     if lista_envio:
-                        # Validación previa: bloquear si alguna cantidad
-                        # supera el stock disponible antes de llamar la transacción.
-                        # Esto evita que el pedido se envíe mientras el
-                        # number_input muestra un error de rango.
-                        excesos = [
-                            i for i in lista_envio
-                            if i["cantidad"] > i["stock_actual"]
-                        ]
-                        if excesos:
+                        lista_procesar = [i for i in lista_envio if i["cantidad"] <= i["stock_actual"]]
+                        excesos        = [i for i in lista_envio if i["cantidad"] > i["stock_actual"]]
+                        
+                        if lista_procesar:
+                            ejecutar_envio_transaccional(lista_procesar)
+                            
+                            if excesos:
+                                codigos_excedidos = [e["codigo_producto"] for e in excesos]
+                                st.session_state.carrito = [
+                                    item for item in st.session_state.carrito 
+                                    if item["codigo_producto"] in codigos_excedidos
+                                ]
+                                
+                                st.session_state["lista_productos_colision"] = "".join(
+                                    f"<li><b>{i['producto']}</b>: pediste <b>{i['cantidad']} ud.</b> "
+                                    f"pero el stock bajó a <b>{i['stock_actual']} ud.</b></li>"
+                                    for i in excesos
+                                )
+                                st.session_state["alerta_tipo"] = "parcial"
+                                st.session_state["toast_msg"]  = "✅ Pedido procesado parcialmente"
+                                st.session_state["toast_icon"] = "⚠️"
+                            else:
+                                pass # ejecutar_envio_transaccional maneja la limpieza si todo fue exitoso
+                                
+                            st.rerun(scope="fragment")
+                            
+                        else:
                             st.session_state["lista_productos_colision"] = "".join(
-                                f"<li><b>{i['producto']}</b>: pediste "
-                                f"<b>{i['cantidad']} ud.</b> pero solo hay "
-                                f"<b>{i['stock_actual']} ud.</b> disponibles.</li>"
+                                f"<li><b>{i['producto']}</b>: pediste <b>{i['cantidad']} ud.</b> "
+                                f"pero el stock bajó a <b>{i['stock_actual']} ud.</b></li>"
                                 for i in excesos
                             )
+                            st.session_state["alerta_tipo"] = "total"
                             st.rerun(scope="fragment")
-                        else:
-                            ejecutar_envio_transaccional(lista_envio)
 
                 if "lista_productos_colision" in st.session_state:
+                    es_parcial = st.session_state.get("alerta_tipo") == "parcial"
+                    
+                    titulo = "⚠️ Pedido procesado parcialmente" if es_parcial else "🚫 No se pudo procesar tu pedido"
+                    color_borde = "#FFB020" if es_parcial else "#FF3B30"
+                    mensaje_extra = (
+                        "Los demás productos fueron enviados con éxito. Los siguientes artículos "
+                        "se quedaron en tu carrito porque superaron el stock disponible:"
+                    ) if es_parcial else (
+                        "Ninguno de los artículos pudo procesarse por falta de existencias:"
+                    )
+                    
                     st.markdown(f"""
-                    <div class="alerta-stock-container">
-                        <div class="alerta-stock-titulo">🚫 No se pudo enviar tu pedido por falta de existencias</div>
+                    <div class="alerta-stock-container" style="border-left-color: {color_borde};">
+                        <div class="alerta-stock-titulo">{titulo}</div>
+                        <div style="font-size: 0.9rem; margin-bottom: 8px;">{mensaje_extra}</div>
                         <ul class="alerta-stock-lista">{st.session_state["lista_productos_colision"]}</ul>
                         <div class="alerta-stock-sugerencia">
-                            💡 <b>Sugerencia:</b> Reduce la cantidad o elimina el producto agotado para procesar el resto.
+                            💡 <b>Sugerencia:</b> Ajusta la cantidad de los productos restantes para poder enviarlos.
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -643,23 +681,19 @@ else:
             if df_hist is None or df_hist.empty:
                 st.info("No se registran transacciones previas en su cuenta.")
             else:
-                # Detectar columna de precio
                 col_monto = next(
                     (c for c in ("Precio Unitario", "Monto Uni") if c in df_hist.columns),
                     None,
                 )
 
-                # Parsear fechas y ordenar más reciente primero
                 df_h = df_hist.copy()
                 df_h["_fecha_obj"] = df_h.get("Fecha Registro", pd.Series(dtype=str)).apply(
                     lambda v: _parsear_fecha(str(v))
                 )
                 df_h = df_h.sort_values("_fecha_obj", ascending=False, na_position="last")
 
-                # Agrupar por fecha exacta (un expander por día)
                 fechas_unicas = df_h["_fecha_obj"].dropna().unique()
 
-                # Resumen general arriba
                 total_productos = len(df_h)
                 total_bs = 0.0
                 if col_monto:
@@ -698,11 +732,9 @@ else:
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Un expander por cada fecha distinta
                 for fecha_obj in fechas_unicas:
                     df_dia = df_h[df_h["_fecha_obj"] == fecha_obj]
 
-                    # Calcular totales del día para el header del expander
                     n_prods   = len(df_dia)
                     total_dia = 0.0
                     if col_monto:
@@ -716,7 +748,6 @@ else:
 
                     etiqueta  = _etiqueta_relativa(fecha_obj)
                     fecha_fmt = fecha_obj.strftime("%d/%m/%Y")
-                    # El primer expander (más reciente) abre por defecto
                     es_primero = (fecha_obj == fechas_unicas[0])
 
                     label_exp = (
@@ -726,7 +757,6 @@ else:
                     )
 
                     with st.expander(label_exp, expanded=es_primero):
-                        # Encabezado de columnas
                         h1, h2, h3, h4 = st.columns([3.5, 1, 1.3, 1.3])
                         h1.markdown("**Producto**")
                         h2.markdown("**Cant.**")
@@ -737,7 +767,6 @@ else:
                             unsafe_allow_html=True,
                         )
 
-                        # Filas de productos
                         for _, row in df_dia.iterrows():
                             nombre_p = str(row.get("Nombre Producto", "N/A"))
                             cantidad = int(row.get("Cantidad", 0))
@@ -750,20 +779,15 @@ else:
                             subtotal = precio_u * cantidad
 
                             c1, c2, c3, c4 = st.columns([3.5, 1, 1.3, 1.3])
-                            c1.markdown(f"<span style='font-size:0.87rem'>{nombre_p}</span>",
-                                        unsafe_allow_html=True)
-                            c2.markdown(f"<span style='font-size:0.87rem;color:#555'>{cantidad} ud.</span>",
-                                        unsafe_allow_html=True)
-                            c3.markdown(f"<span style='font-size:0.87rem;color:#555'>Bs {precio_u:,.2f}</span>",
-                                        unsafe_allow_html=True)
-                            c4.markdown(f"<span style='font-size:0.9rem;font-weight:700;color:#E63946'>Bs {subtotal:,.2f}</span>",
-                                        unsafe_allow_html=True)
+                            c1.markdown(f"<span style='font-size:0.87rem'>{nombre_p}</span>", unsafe_allow_html=True)
+                            c2.markdown(f"<span style='font-size:0.87rem;color:#555'>{cantidad} ud.</span>", unsafe_allow_html=True)
+                            c3.markdown(f"<span style='font-size:0.87rem;color:#555'>Bs {precio_u:,.2f}</span>", unsafe_allow_html=True)
+                            c4.markdown(f"<span style='font-size:0.9rem;font-weight:700;color:#E63946'>Bs {subtotal:,.2f}</span>", unsafe_allow_html=True)
                             st.markdown(
                                 "<hr style='margin:0.25rem 0;border-color:#F4F4F4;'>",
                                 unsafe_allow_html=True,
                             )
 
-                        # Total del día al pie del expander
                         st.markdown(
                             f"<div style='text-align:right;padding-top:0.3rem;"
                             f"font-size:0.9rem;color:#888;'>"
