@@ -29,7 +29,7 @@ except ImportError:
     pass
 
 # ── Definición de rutas ───────────────────────────────────────────────────────
-inicio    = st.Page("pages/inicio.py",    title="Inicio",    icon="🏠", default=True)
+inicio = st.Page("pages/inicio.py", title="Inicio", icon="🏠")
 dashboard = st.Page("pages/dashboard.py", title="Dashboard", icon="📊")
 pedido    = st.Page("pages/pedido.py",    title="Mi Pedido", icon="🛒")
 
