@@ -1,14 +1,8 @@
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*
 """
 PUNTO DE ENTRADA - OUTLET PROESA
 ----------------------------------
-Solo gestiona configuración global y definición de rutas.
-No contiene lógica de negocio ni contenido visual propio.
-
-Páginas administración : inicio, dashboard
-Páginas empleados      : pedido
-
-NOTA: Requiere Streamlit >= 1.36.0 para st.navigation() y st.Page().
+...
 """
 
 import streamlit as st
@@ -19,6 +13,19 @@ st.set_page_config(
     layout="wide",
     page_icon="📦",
     initial_sidebar_state="expanded",
+)
+
+# ── INYECCIÓN GLOBAL PARA MARCA BLANCA (ELIMINAR LOGOS/FOOTER) ────────────────
+st.markdown(
+    """
+    <style>
+    header, .stAppHeader { visibility: hidden !important; display: none !important; }
+    .stDecoration { display: none !important; }
+    div[data-testid="stToolbar"] { visibility: hidden !important; display: none !important; }
+    footer, div[data-testid="stFooter"] { visibility: hidden !important; display: none !important; }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
 # ── CSS global de navegación ──────────────────────────────────────────────────
