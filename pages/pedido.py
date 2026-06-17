@@ -294,7 +294,7 @@ if not st.session_state.logged_in:
         st.subheader("🔑 Acceso al Sistema")
         cod = st.text_input(
             "Código de Empleado",
-            placeholder="Ej: E0200491",
+            placeholder="Ej: E0202026",
             help="Consulte con su supervisor si desconoce su código corporativo.",
         ).upper().strip()
         st.markdown("<br>", unsafe_allow_html=True)
